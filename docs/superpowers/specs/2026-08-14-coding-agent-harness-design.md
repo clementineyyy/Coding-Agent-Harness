@@ -1,53 +1,48 @@
-# Coding Agent Harness — Design Spec
+# 编码智能体框架（Coding Agent Harness）— 设计规格
 
-- Date: 2026-08-14
-- Status: Draft
-- Environment: Windows, Python 3.11+, model via DeepSeek API (OpenAI-compatible)
+- 日期：2026-08-14
+- 状态：草稿
+- 环境：Windows，Python 3.11+，模型通过 DeepSeek API（兼容 OpenAI 协议）调用
 
-## 1. Overview
+## 1. 概述
 
-A minimal-but-real coding agent harness, built to learn how tools like opencode
-and Claude Code work. It drives an LLM through an agentic loop — model turns,
-tool calls, results fed back — wrapped in a security and interaction layer:
+一个"最小但真实"的编码智能体框架，用于学习 opencode 和 Claude Code 这类工具的内部工作原理。它驱动 LLM 执行智能体循环——模型回合、工具调用、结果回填——并包裹一层安全与交互机制：
 
-- **Guardrails** gate every tool call (allow / ask / deny)
-- **Sandbox** isolates tool execution (pluggable executors)
-- **Hooks** instrument the pipeline (PreToolUse / PostToolUse / SessionEnd)
-- **HITL state machine** coordinates human-in-the-loop interaction, including
-  agent-initiated questions
-- **Adaptive policy** learns from user answers within a session
-- **Subagents** recurse the same loop with fresh context
-- **Skills** are loadable instruction files (SKILL.md convention) that may only
-  tighten policy, never loosen it
+- **Guardrails（护栏）** 为每次工具调用把关（allow / ask / deny）
+- **Sandbox（沙箱）** 隔离工具执行环境（可插拔的执行器）
+- **Hooks（钩子）** 对流水线进行插桩（PreToolUse / PostToolUse / SessionEnd）
+- **HITL 状态机** 协调人在环交互，包括智能体主动发起的提问
+- **自适应策略（Adaptive policy）** 在会话内从用户回答中学习
+- **子智能体（Subagents）** 以全新上下文递归执行同一个循环
+- **技能（Skills）** 是可加载的指令文件（SKILL.md 约定），只能收紧策略，绝不可放宽
 
-Primary goal: readable, minimal code. The agentic loop stays front and center.
+主要目标：代码可读、最小化。智能体循环始终居于核心位置。
 
-## 2. Non-goals (v1)
+## 2. 非目标（v1 不做）
 
-- No Docker backend (stub with fail-fast message until Docker is installed)
-- No multi-user / auth / remote access
-- No policy persistence across sessions (session-scoped only; persistence file
-  is future work)
-- No async framework — synchronous, single-threaded
-- No TUI framework — plain terminal REPL
+- 无 Docker 后端（先做桩实现，未安装 Docker 时快速报错；后续可接入）
+- 无多用户 / 认证 / 远程访问
+- 策略不做跨会话持久化（仅会话内生效；持久化文件留待将来）
+- 不使用异步框架——同步、单线程
+- 不使用 TUI 框架——纯终端 REPL
 
-## 3. Architecture
+## 3. 架构
 
 ```
-harness/                          # project root == repo root
-├── main.py          # REPL: prompt, menus, interrupt handling
-├── agent.py         # Agent loop + tool pipeline
-├── state.py         # HITL state machine (table-driven)
-├── policy.py        # adaptive guardrail policy (session rules)
-├── guardrails.py    # rule evaluation → allow | ask | deny
-├── sandbox.py       # Sandbox interface: local (now), docker (stub)
-├── hooks.py         # event bus: PreToolUse/PostToolUse/SessionEnd
-├── llm.py           # DeepSeek client wrapper
-├── config.py        # env, model, settings
-├── skills/          # skill files (SKILL.md convention)
+harness/                          # 项目根目录 == 仓库根目录
+├── main.py          # REPL：提示符、菜单、中断处理
+├── agent.py         # 智能体循环 + 工具流水线
+├── state.py         # HITL 状态机（表驱动）
+├── policy.py        # 自适应护栏策略（会话内规则）
+├── guardrails.py    # 规则评估 → allow | ask | deny
+├── sandbox.py       # Sandbox 接口：local（现用）、docker（桩）
+├── hooks.py         # 事件总线：PreToolUse/PostToolUse/SessionEnd
+├── llm.py           # DeepSeek 客户端封装
+├── config.py        # 环境变量、模型、设置
+├── skills/          # 技能文件（SKILL.md 约定）
 ├── tools/
 │   ├── __init__.py  # TOOL_REGISTRY
-│   ├── bash.py      # run shell commands
+│   ├── bash.py      # 运行 shell 命令
 │   ├── files.py     # read_file, write_file
 │   ├── search.py    # glob, grep
 │   ├── web.py       # fetch_url
@@ -55,210 +50,193 @@ harness/                          # project root == repo root
 │   ├── subagent.py  # run_subagent
 │   ├── ask.py       # ask_user
 │   └── skills.py    # list_skills, load_skill
-├── transcripts/     # session transcripts (written by SessionEnd)
-└── tests/           # pytest + fake LLM client
+├── transcripts/     # 会话转录（由 SessionEnd 写入）
+└── tests/           # pytest + 假 LLM 客户端
 ```
 
-Dependencies: `openai` (SDK, pointed at DeepSeek), `requests` (fetch_url).
-Everything else is the Python standard library.
+依赖：`openai`（SDK，指向 DeepSeek）、`requests`（fetch_url）。
+其余全部使用 Python 标准库。
 
-## 4. Components
+## 4. 组件
 
-### 4.1 Agent loop (agent.py)
+### 4.1 智能体循环（agent.py）
 
-One class, `Agent`. State: a `list[dict]` of messages (the only state).
+一个类 `Agent`。状态：`list[dict]` 消息列表（唯一的状态）。
 
-Loop:
-1. Build request: system prompt + history, `tools=` schemas from the registry
-2. Call DeepSeek via `client.chat.completions.create(stream=True)`, relay
-   streamed text to the terminal
-3. No tool calls in the turn → final answer → return, loop ends
-4. Otherwise, execute each tool call through the tool pipeline (section 5)
-5. Append assistant message + `role: "tool"` results → back to step 1
+循环：
+1. 构造请求：系统提示词 + 历史记录，`tools=` 模式来自注册表
+2. 调用 DeepSeek：`client.chat.completions.create(stream=True)`，将流式文本转发到终端
+3. 该回合没有工具调用 → 得到最终答案 → 返回，循环结束
+4. 否则，通过工具流水线（第 5 节）执行每个工具调用
+5. 追加 assistant 消息 + `role: "tool"` 结果 → 回到步骤 1
 
-Guardrails on the loop itself:
-- Step cap (default 50), kills runaway loops with a clear message
-- Tool timeout per call (default 30s)
-- Conversation history held in memory only
+循环自身的护栏：
+- 步数上限（默认 50），超限时以明确消息终止失控循环
+- 每次工具调用超时（默认 30s）
+- 对话历史仅保存在内存中
 
-### 4.2 HITL state machine (state.py)
+### 4.2 HITL 状态机（state.py）
 
-Table-driven: a plain dict mapping `(state, event) → next state`.
+表驱动：一个普通字典，映射 `(state, event) → next state`。
 
 ```
-States:
+状态：
   idle, running, awaiting_user, paused, completed, terminated
 
-Events:
+事件：
   task_submitted, tool_requested, approval_needed, user_answered,
   agent_question, interrupt, resume, abort, final_answer, error
 ```
 
-Canonical transitions:
+标准转移：
 - `idle + task_submitted → running`
-- `running + approval_needed → awaiting_user` (guardrail ask)
-- `running + agent_question → awaiting_user` (ask_user tool)
+- `running + approval_needed → awaiting_user`（护栏 ask）
+- `running + agent_question → awaiting_user`（ask_user 工具）
 - `awaiting_user + user_answered → running`
 - `awaiting_user + abort → terminated`
-- `running + interrupt → paused`; `paused + resume → running`;
+- `running + interrupt → paused`；`paused + resume → running`；
   `paused + abort → terminated`
-- `running + final_answer → completed`; `completed + task_submitted → running`
-- any + `error` → `running` (recoverable) unless session is unusable → `terminated`
+- `running + final_answer → completed`；`completed + task_submitted → running`
+- 任意状态 + `error` → `running`（可恢复），除非会话已不可用 → `terminated`
 
-Every event carries its source (guardrail, agent, user, loop) so the REPL can
-render the right interaction.
+每个事件都携带来源（护栏、智能体、用户、循环），便于 REPL 渲染正确的交互。
 
-### 4.3 Adaptive policy (policy.py)
+### 4.3 自适应策略（policy.py）
 
-Session-scoped `Policy` object holding live rules. Guardrail `ask` outcomes
-feed back:
+会话级 `Policy` 对象，持有实时规则。护栏 `ask` 的结果会反馈进去：
 
-- User answers "always allow" → that rule downgrades to `allow` for the session
-- Same pattern denied twice → auto-escalates to `deny` (session notice)
-- Pattern approved repeatedly → auto-downgrades to `allow`
-- `ask_user` answers record lightweight preferences (e.g., "don't delete
-  files" → future deletes bump to ask)
+- 用户回答"总是允许" → 该规则降级为会话内 `allow`
+- 同一模式被拒绝两次 → 自动升级为 `deny`（并发出会话提示）
+- 同一模式被反复批准 → 自动降级为 `allow`
+- `ask_user` 的回答会记录轻量偏好（例如"不要删除文件"→ 未来的删除操作升级为 ask）
 
-`/rules` shows the live policy. Skill rules are tagged `skill:<name>` and can
-be dropped with `/rules drop skill:<name>`. User-derived rules always win over
-skill rules.
+`/rules` 显示实时策略。技能规则带 `skill:<name>` 标签，可用
+`/rules drop skill:<name>` 移除。用户产生的规则永远优先于技能规则。
 
-### 4.4 Guardrails (guardrails.py)
+### 4.4 Guardrails（guardrails.py）
 
-Ordered rules table: `tool-pattern → allow | ask | deny`, last match wins.
-A rule pattern is `tool_name[:arg_regex]` — the tool name alone, or the tool
-name plus a regular expression matched against the serialized args
-(e.g., `bash:rm -rf.*`). Rules come from three sources: built-in defaults,
-user answers (adaptive), skill declarations (restrict-only, see 4.7).
+有序规则表：`工具模式 → allow | ask | deny`，最后匹配者生效。
+规则模式为 `tool_name[:arg_regex]`——仅工具名，或工具名加一个匹配序列化参数
+的正则表达式（例如 `bash:rm -rf.*`）。规则有三个来源：内置默认、用户回答
+（自适应）、技能声明（仅限收紧，见 4.7）。
 
-Built-in defaults:
-- Deny dangerous bash patterns (`rm -rf` on system paths, fork bombs, etc.)
-- Deny writes outside the workspace
-- Deny switching the sandbox network mode (see 4.5)
-- Everything else: allow
+内置默认：
+- 拒绝危险的 bash 模式（系统路径上的 `rm -rf`、fork 炸弹等）
+- 拒绝在工作区之外写入
+- 拒绝未经批准切换沙箱网络模式（见 4.5）
+- 其余全部 allow
 
-An `ask` verdict triggers the REPL menu (human-in-the-loop) and moves the
-state machine to `awaiting_user`.
+`ask` 判定会触发 REPL 菜单（人在环），并将状态机转入 `awaiting_user`。
 
-### 4.5 Sandbox (sandbox.py)
+### 4.5 Sandbox（sandbox.py）
 
-`Sandbox` interface — two backends, selected per tool via registry config:
+`Sandbox` 接口——两种后端，按工具在注册表配置中选择：
 
-- `local` — direct subprocess on the host (default; used by bash)
-- `docker` — stub: raises a clear error stating Docker Desktop is required
-  until the user installs it; the backend is fully wired to the interface so
-  it slots in without touching other code
+- `local` — 直接在宿主机上运行子进程（默认；bash 使用）
+- `docker` — 桩：未安装 Docker 时抛出明确错误提示需要 Docker Desktop；
+  后端已完整接入接口，安装后可无缝替换，不影响其他代码
 
-The interface exposes a `network_enabled` flag (default off for bash; on for
-`fetch_url`). Switching it mid-session is guardrail-gated (`ask`) and records
-a policy rule for the session.
+接口暴露 `network_enabled` 标志（bash 默认关闭；`fetch_url` 开启）。
+会话中途切换该标志需经护栏把关（`ask`），并为会话记录一条策略规则。
 
-File tools operate on the workspace path only; path canonicalization
-(`resolve()` + containment check) prevents `..` escapes and symlink escapes.
+文件类工具只允许操作工作区路径；路径规范化（`resolve()` + 包含性检查）
+防止 `..` 逃逸和符号链接逃逸。
 
-### 4.6 Hooks (hooks.py)
+### 4.6 Hooks（hooks.py）
 
-Small event bus. User registers Python callbacks in `hooks.py`. Hook points:
+小型事件总线。用户在 `hooks.py` 中注册 Python 回调。钩子点：
 
-- `PreToolUse(name, args)` — observe or modify args; runs only after the
-  guardrail approved the call; cannot resurrect a denied call
-- `PostToolUse(name, args, result)` — observe/record
-- `SessionEnd(messages)` — runs after final answer; default handler writes the
-  transcript to `transcripts/<timestamp>.json`
+- `PreToolUse(name, args)` — 观察或修改参数；仅在护栏批准之后运行；
+  无法复活已被拒绝的调用
+- `PostToolUse(name, args, result)` — 观察/记录
+- `SessionEnd(messages)` — 最终答案之后运行；默认处理器将转录写入
+  `transcripts/<时间戳>.json`
 
-Hook exceptions are logged, never fatal. Hook ordering: registration order.
+钩子异常只记日志，绝不致命。钩子按注册顺序执行。
 
-### 4.7 Skills (skills/)
+### 4.7 Skills（skills/）
 
-Directory convention: `skills/<name>/SKILL.md` with frontmatter
-(`name`, `description`, optional `rules`, optional `hooks`).
+目录约定：`skills/<name>/SKILL.md`，带 frontmatter
+（`name`、`description`，可选 `rules`、`hooks`）。
 
-Tools: `list_skills` (names + descriptions), `load_skill(name)` (reads file,
-injects as a system message, registers any declared rules/hooks).
+工具：`list_skills`（名称 + 描述）、`load_skill(name)`（读取文件，
+作为系统消息注入，并注册声明的规则/钩子）。
 
-Security model (restrict-only, enforced at load time):
-- Declared `rules` may only be `ask` or `deny` — `allow` declarations are
-  rejected with a warning and dropped
-- Declared `hooks` are observer-only: PostToolUse / SessionEnd; PreToolUse
-  modification is rejected
-- Violations fail loudly at `load_skill` time, and the offending parts are
-  dropped while the skill's prompt still loads
+安全模型（仅限收紧，加载时强制）：
+- 声明的 `rules` 只能是 `ask` 或 `deny`——`allow` 声明会被拒绝并给出警告后丢弃
+- 声明的 `hooks` 仅限观察：PostToolUse / SessionEnd；PreToolUse 修改会被拒绝
+- 违规在 `load_skill` 时大声失败，违规部分被丢弃，技能提示词本身仍可加载
 
-### 4.8 Tools (tools/)
+### 4.8 Tools（tools/）
 
-Registry: `TOOL_REGISTRY` maps `name → {description, parameters (JSON schema),
-handler}`. The registry generates the API `tools=` payload.
+注册表：`TOOL_REGISTRY` 映射 `name → {description, parameters (JSON schema),
+handler}`。注册表生成 API 所需的 `tools=` 载荷。
 
-| Tool | Handler | Notes |
+| 工具 | 处理器 | 说明 |
 |---|---|---|
-| `bash` | bash.py | via Sandbox executor, timeout, captures stdout/stderr/exit code |
-| `read_file` | files.py | workspace paths only |
-| `write_file` | files.py | workspace paths only; guardrail-gated |
-| `glob` | search.py | workspace paths only |
-| `grep` | search.py | workspace paths only |
-| `fetch_url` | web.py | `requests`, size cap on response |
-| `note_add` / `note_read` | notes.py | model scratchpad (in-memory) |
-| `run_subagent` | subagent.py | new Agent, fresh context, own step cap (~30), inherits guardrails/hooks/policy |
-| `ask_user` | ask.py | renders numbered menu, answer returned as tool result |
-| `list_skills` / `load_skill` | skills.py | skill loading + restrict-only registration |
+| `bash` | bash.py | 经 Sandbox 执行器运行，超时，捕获 stdout/stderr/退出码 |
+| `read_file` | files.py | 仅工作区路径 |
+| `write_file` | files.py | 仅工作区路径；受护栏把关 |
+| `glob` | search.py | 仅工作区路径 |
+| `grep` | search.py | 仅工作区路径 |
+| `fetch_url` | web.py | `requests`，响应大小上限 |
+| `note_add` / `note_read` | notes.py | 模型草稿纸（内存中） |
+| `run_subagent` | subagent.py | 新建 Agent，全新上下文，独立步数上限（约 30），继承护栏/钩子/策略 |
+| `ask_user` | ask.py | 渲染编号菜单，回答作为工具结果返回 |
+| `list_skills` / `load_skill` | skills.py | 技能加载 + 仅限收紧的注册 |
 
-Subagent isolation is free: each `Agent` holds its own messages list. The
-parent receives the child's final answer as the tool result.
+子智能体的隔离是免费的：每个 `Agent` 持有自己的消息列表。父智能体将子智能体
+的最终答案作为工具结果接收。
 
-### 4.9 REPL (main.py)
+### 4.9 REPL（main.py）
 
-- Prompt accepts a task; agent works with streamed output
-- Inline tool activity: `→ bash: ls -la`, `⊘ denied: ...`, `? allow ...? (y/n)`
-- `ask_user` renders a numbered menu; guardrail asks render y/n (with
-  "always allow" / "never allow" options)
-- Commands: `/exit`, `/reset` (clear context), `/skills`, `/rules`,
+- 提示符接受任务；智能体工作时流式输出
+- 行内工具活动：`→ bash: ls -la`、`⊘ denied: ...`、`? allow ...? (y/n)`
+- `ask_user` 渲染编号菜单；护栏 ask 渲染 y/n（附带"总是允许"/"绝不允许"选项）
+- 命令：`/exit`、`/reset`（清空上下文）、`/skills`、`/rules`、
   `/rules drop skill:<name>`
-- After each turn: token usage + step count
+- 每回合结束显示：token 用量 + 步数
 
-### 4.10 LLM wrapper (llm.py) + config (config.py)
+### 4.10 LLM 封装（llm.py）+ 配置（config.py）
 
-- `config.py` reads `DEEPSEEK_API_KEY` from env; model `deepseek-chat`
-- `llm.py`: thin wrapper — `openai.OpenAI(base_url="https://api.deepseek.com",
-  api_key=...)`, exposes a single `complete(messages, tools) → stream`
+- `config.py` 从环境变量读取 `DEEPSEEK_API_KEY`；模型 `deepseek-chat`
+- `llm.py`：薄封装——`openai.OpenAI(base_url="https://api.deepseek.com",
+  api_key=...)`，暴露单一方法 `complete(messages, tools) → stream`
 
-## 5. Tool pipeline (per tool call)
+## 5. 工具流水线（每次工具调用）
 
 ```
-tool requested
-  → guardrail: allow | ask | deny            (policy.py, adaptive)
-      ask → state=awaiting_user → menu → answer feeds back into policy
-  → sandbox executor selected                (per-tool: local / docker-stub)
-  → PreToolUse hook                          (observe/modify; cannot resurrect)
-  → execute                                  (timeout)
-  → PostToolUse hook                         (observe/record)
-  → result appended as role:"tool" message
+发起工具调用
+  → 护栏：allow | ask | deny            （policy.py，自适应）
+      ask → 状态=awaiting_user → 菜单 → 回答反馈回策略
+  → 选择 Sandbox 执行器                （按工具：local / docker-桩）
+  → PreToolUse 钩子                    （观察/修改；不能复活）
+  → 执行                                （超时）
+  → PostToolUse 钩子                   （观察/记录）
+  → 结果追加为 role:"tool" 消息
 ```
 
-Guardrail is the security boundary; sandbox is the execution boundary; hooks
-are instrumentation; the state machine is the interaction spine.
+护栏是安全边界；沙箱是执行边界；钩子是插桩；状态机是交互主轴。
 
-## 6. Error handling
+## 6. 错误处理
 
-- API errors (bad key, rate limit, network): clear message; session survives
-- Tool exceptions: formatted error returned to the model as the tool result
-  (model can self-correct); never a crash
-- Guardrail deny / hook exceptions: deny wins; hook errors logged
-- Ctrl+C: clean shutdown; fires `SessionEnd` (transcript saved)
+- API 错误（密钥错误、限流、网络）：给出明确提示；会话继续存活
+- 工具异常：格式化的错误作为工具结果返回给模型（模型可自我纠正）；绝不崩溃
+- 护栏拒绝 / 钩子异常：拒绝优先；钩子错误只记日志
+- Ctrl+C：干净退出；触发 `SessionEnd`（保存转录）
 
-## 7. Testing (pytest, no network)
+## 7. 测试（pytest，无网络）
 
-- Fake LLM client stubs the SDK: scripted responses
-  (turn 1 = tool call, turn 2 = final answer)
-- Loop tests: message history, step cap, guardrail deny path, hook ordering
-  (guardrail → PreToolUse → tool → PostToolUse), state machine transitions
-- Tool tests: handlers against temp fixtures (bash capture, file read/write,
-  glob/grep, mocked fetch_url, notes)
-- Policy tests: escalation on double-deny, downgrade on always-allow,
-  skill rule rejections (allow declared by skill is dropped)
-- Subagent tests: parent + child scripted turns; context isolation asserted
-- Path tests: `..` and symlink escapes rejected
+- 假 LLM 客户端桩掉 SDK：脚本化响应（第 1 回合 = 工具调用，第 2 回合 = 最终答案）
+- 循环测试：消息历史、步数上限、护栏拒绝路径、钩子顺序
+  （guardrail → PreToolUse → tool → PostToolUse）、状态机转移
+- 工具测试：处理器针对临时夹具（bash 捕获、文件读写、glob/grep、
+  模拟 fetch_url、笔记）
+- 策略测试：双重拒绝升级、总是允许降级、技能规则拒绝
+  （技能声明 allow 会被丢弃）
+- 子智能体测试：父 + 子脚本化回合；断言上下文隔离
+- 路径测试：`..` 与符号链接逃逸被拒绝
 
-## 8. Open decisions
+## 8. 未决事项
 
-None — all decisions resolved in brainstorming. Docker backend is stubbed,
-not open.
+无——所有决策已在头脑风暴中解决。Docker 后端为桩实现，不属未决项。
