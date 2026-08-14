@@ -22,6 +22,7 @@
 
 - 无 Docker 后端（先做桩实现，未安装 Docker 时快速报错；后续可接入）
 - 无多用户 / 认证 / 远程访问
+- 无 embeddings / 向量数据库——v1 检索用纯标准库 TF-IDF（向量检索是后续升级）
 - 策略不做跨会话持久化（仅会话内生效；持久化文件留待将来）
 - 不使用异步框架——同步、单线程
 - 不使用 TUI 框架——纯终端 REPL
@@ -40,6 +41,7 @@ harness/                          # 项目根目录 == 仓库根目录
 ├── llm.py           # DeepSeek 客户端封装
 ├── config.py        # 环境变量、模型、设置
 ├── skills/          # 技能文件（SKILL.md 约定）
+├── memory/          # 长期记忆文件（*.md，RAG 索引源）
 ├── tools/
 │   ├── __init__.py  # TOOL_REGISTRY
 │   ├── bash.py      # 运行 shell 命令
@@ -47,6 +49,7 @@ harness/                          # 项目根目录 == 仓库根目录
 │   ├── search.py    # glob, grep
 │   ├── web.py       # fetch_url
 │   ├── notes.py     # note_add, note_read
+│   ├── memory.py    # memory_save, memory_search（TF-IDF 检索）
 │   ├── subagent.py  # run_subagent
 │   ├── ask.py       # ask_user
 │   └── skills.py    # list_skills, load_skill
@@ -181,6 +184,8 @@ handler}`。注册表生成 API 所需的 `tools=` 载荷。
 | `grep` | search.py | 仅工作区路径 |
 | `fetch_url` | web.py | `requests`，响应大小上限 |
 | `note_add` / `note_read` | notes.py | 模型草稿纸（内存中） |
+| `memory_save` | memory.py | 写入长期记忆 `memory/*.md`（带标签），跨会话存活 |
+| `memory_search` | memory.py | 纯标准库 TF-IDF 检索，返回 top-k 相关块 |
 | `run_subagent` | subagent.py | 新建 Agent，全新上下文，独立步数上限（约 30），继承护栏/钩子/策略 |
 | `ask_user` | ask.py | 渲染编号菜单，回答作为工具结果返回 |
 | `list_skills` / `load_skill` | skills.py | 技能加载 + 仅限收紧的注册 |
@@ -202,6 +207,32 @@ handler}`。注册表生成 API 所需的 `tools=` 载荷。
 - `config.py` 从环境变量读取 `DEEPSEEK_API_KEY`；模型 `deepseek-chat`
 - `llm.py`：薄封装——`openai.OpenAI(base_url="https://api.deepseek.com",
   api_key=...)`，暴露单一方法 `complete(messages, tools) → stream`
+
+### 4.11 上下文工程 + 记忆与 RAG（memory.py）
+
+**长期记忆**（`memory/` 目录 + 2 个工具）：
+- `memory_save(title, content, tags)` — 智能体将持久的事实/决策/经验写入
+  `memory/*.md`。跨会话存活；会话内的 `notes` 仍为内存草稿纸
+- `memory_search(query)` — 检索 top-k 相关块并作为上下文返回
+
+**检索——简单 RAG，零外部依赖**：
+- 按段落切分记忆文件；会话启动时建立索引
+- 纯标准库 **TF-IDF**（分词 → 词频 → IDF → 余弦相似度）——约 80 行可实现，
+  无新依赖，无需 embedding API（DeepSeek 本身也没有 embeddings 端点）
+- 两个注入点：新任务启动时自动注入 top-2 块（低成本上下文），加上按需的
+  `memory_search` 工具供模型需要更多时调用
+- `load_skill` 与记忆检索共用同一注入机制（作为上下文消息追加）
+
+**上下文窗口管理**：
+- 近似 token 计数（字符数/4 启发式——不引入 tiktoken 依赖）
+- 每次调用 LLM 前做预算检查：若历史超出预算，触发**自动压缩**——模型将较旧
+  回合总结为一条精简系统消息（"当前状态"），保留最近 N 个回合完整不动。
+  压缩设置步数上限防止死循环
+- 每回合打印 token 用量（REPL 设计中已有）
+
+**取舍说明**：embeddings 版 RAG（质量更好，但需要外部 API + 密钥 + 成本）
+vs TF-IDF（免费、离线、对学习项目透明）。v1 推荐 TF-IDF——向量/embedding
+路径是日后干净的升级方向。
 
 ## 5. 工具流水线（每次工具调用）
 
@@ -236,6 +267,9 @@ handler}`。注册表生成 API 所需的 `tools=` 载荷。
   （技能声明 allow 会被丢弃）
 - 子智能体测试：父 + 子脚本化回合；断言上下文隔离
 - 路径测试：`..` 与符号链接逃逸被拒绝
+- 记忆/RAG 测试：memory_save 落盘、TF-IDF 检索命中/相关性排序、
+  启动时自动注入 top-2
+- 压缩测试：历史超出预算触发总结压缩、保留最近回合、压缩步数上限
 
 ## 8. 未决事项
 
