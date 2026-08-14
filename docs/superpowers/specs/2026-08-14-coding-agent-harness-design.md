@@ -126,13 +126,15 @@ skill rules.
 ### 4.4 Guardrails (guardrails.py)
 
 Ordered rules table: `tool-pattern → allow | ask | deny`, last match wins.
-Rules come from three sources: built-in defaults, user answers (adaptive),
-skill declarations (restrict-only, see 4.7).
+A rule pattern is `tool_name[:arg_regex]` — the tool name alone, or the tool
+name plus a regular expression matched against the serialized args
+(e.g., `bash:rm -rf.*`). Rules come from three sources: built-in defaults,
+user answers (adaptive), skill declarations (restrict-only, see 4.7).
 
 Built-in defaults:
 - Deny dangerous bash patterns (`rm -rf` on system paths, fork bombs, etc.)
 - Deny writes outside the workspace
-- Deny switching sandbox network mode without approval
+- Deny switching the sandbox network mode (see 4.5)
 - Everything else: allow
 
 An `ask` verdict triggers the REPL menu (human-in-the-loop) and moves the
@@ -146,6 +148,10 @@ state machine to `awaiting_user`.
 - `docker` — stub: raises a clear error stating Docker Desktop is required
   until the user installs it; the backend is fully wired to the interface so
   it slots in without touching other code
+
+The interface exposes a `network_enabled` flag (default off for bash; on for
+`fetch_url`). Switching it mid-session is guardrail-gated (`ask`) and records
+a policy rule for the session.
 
 File tools operate on the workspace path only; path canonicalization
 (`resolve()` + containment check) prevents `..` escapes and symlink escapes.
