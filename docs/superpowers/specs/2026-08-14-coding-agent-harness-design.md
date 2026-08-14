@@ -15,6 +15,9 @@
 - **自适应策略（Adaptive policy）** 在会话内从用户回答中学习
 - **子智能体（Subagents）** 以全新上下文递归执行同一个循环
 - **技能（Skills）** 是可加载的指令文件（SKILL.md 约定），只能收紧策略，绝不可放宽
+- **上下文工程 + 记忆与 RAG**：任务开始先检索记忆注入上下文，任务结束整合写入；
+  TF-IDF 检索，超预算自动压缩
+- **MCP** 支持：外部 MCP 服务器的工具动态注册，与内置工具同走一条流水线
 
 主要目标：代码可读、最小化。智能体循环始终居于核心位置。
 
@@ -39,7 +42,8 @@ harness/                          # 项目根目录 == 仓库根目录
 ├── sandbox.py       # Sandbox 接口：local（现用）、docker（桩）
 ├── hooks.py         # 事件总线：PreToolUse/PostToolUse/SessionEnd
 ├── llm.py           # DeepSeek 客户端封装
-├── config.py        # 环境变量、模型、设置
+├── mcp.py           # MCP 客户端管理（stdio/url 服务器 → 注册表）
+├── config.py        # 环境变量、模型、设置、mcp 配置
 ├── skills/          # 技能文件（SKILL.md 约定）
 ├── memory/          # 长期记忆文件（*.md，RAG 索引源）
 ├── tools/
@@ -57,7 +61,8 @@ harness/                          # 项目根目录 == 仓库根目录
 └── tests/           # pytest + 假 LLM 客户端
 ```
 
-依赖：`openai`（SDK，指向 DeepSeek）、`requests`（fetch_url）。
+依赖：`openai`（SDK，指向 DeepSeek）、`requests`（fetch_url）、
+`mcp`（官方 Model Context Protocol SDK）。
 其余全部使用 Python 标准库。
 
 ## 4. 组件
@@ -65,18 +70,32 @@ harness/                          # 项目根目录 == 仓库根目录
 ### 4.1 智能体循环（agent.py）
 
 一个类 `Agent`。状态：`list[dict]` 消息列表（唯一的状态）。
+每次任务按三个阶段执行：
 
-循环：
-1. 构造请求：系统提示词 + 历史记录，`tools=` 模式来自注册表
-2. 调用 DeepSeek：`client.chat.completions.create(stream=True)`，将流式文本转发到终端
-3. 该回合没有工具调用 → 得到最终答案 → 返回，循环结束
-4. 否则，通过工具流水线（第 5 节）执行每个工具调用
-5. 追加 assistant 消息 + `role: "tool"` 结果 → 回到步骤 1
+**任务开始——上下文工程（Context Engineering）**
+1. 检索记忆：从 `memory/` 取 top-k 相关块（TF-IDF），作为上下文注入
+2. 预算检查：token 计数 vs 窗口预算；超出则先自动压缩
+3. （模型中途加载的技能按同一机制注入）
+
+**迭代——工具使用（直到最终答案）**
+4. 构造请求：系统提示词 + 历史记录，`tools=` 模式来自注册表
+5. 调用 DeepSeek：`client.chat.completions.create(stream=True)`，将流式文本转发到终端
+6. 该回合没有工具调用 → 得到最终答案 → 进入任务结束阶段
+7. 否则，通过工具流水线（第 5 节）执行每个工具调用
+8. 追加 assistant 消息 + `role: "tool"` 结果 → 回到步骤 4
+
+**任务结束——收尾**
+9. 触发 `SessionEnd` 钩子（默认处理器将转录写入 `transcripts/<时间戳>.json`）
+10. 记忆整合：模型总结本次会话的关键经验（决策、事实、坑）→
+    `memory_save` 写入 `memory/`，供未来会话检索
 
 循环自身的护栏：
 - 步数上限（默认 50），超限时以明确消息终止失控循环
 - 每次工具调用超时（默认 30s）
 - 对话历史仅保存在内存中
+
+子智能体（`run_subagent`）按同一三阶段序列执行——各自检索记忆、
+各自迭代、各自收尾整合——上下文天然隔离。
 
 ### 4.2 HITL 状态机（state.py）
 
@@ -152,8 +171,8 @@ harness/                          # 项目根目录 == 仓库根目录
 - `PreToolUse(name, args)` — 观察或修改参数；仅在护栏批准之后运行；
   无法复活已被拒绝的调用
 - `PostToolUse(name, args, result)` — 观察/记录
-- `SessionEnd(messages)` — 最终答案之后运行；默认处理器将转录写入
-  `transcripts/<时间戳>.json`
+- `SessionEnd(messages)` — 任务结束时**最先**触发（早于记忆整合）；默认处理器
+  将转录写入 `transcripts/<时间戳>.json`
 
 钩子异常只记日志，绝不致命。钩子按注册顺序执行。
 
@@ -189,6 +208,7 @@ handler}`。注册表生成 API 所需的 `tools=` 载荷。
 | `run_subagent` | subagent.py | 新建 Agent，全新上下文，独立步数上限（约 30），继承护栏/钩子/策略 |
 | `ask_user` | ask.py | 渲染编号菜单，回答作为工具结果返回 |
 | `list_skills` / `load_skill` | skills.py | 技能加载 + 仅限收紧的注册 |
+| MCP 工具（动态） | mcp.py | 会话启动时从 MCP 服务器列出并注册，走同一条流水线 |
 
 子智能体的隔离是免费的：每个 `Agent` 持有自己的消息列表。父智能体将子智能体
 的最终答案作为工具结果接收。
@@ -215,6 +235,9 @@ handler}`。注册表生成 API 所需的 `tools=` 载荷。
   `memory/*.md`。跨会话存活；会话内的 `notes` 仍为内存草稿纸
 - `memory_search(query)` — 检索 top-k 相关块并作为上下文返回
 
+**记忆生命周期**：任务开始先**读取检索**（注入上下文）→ 任务结束再**整合写入**
+（SessionEnd 钩子之后执行，见 4.1）。
+
 **检索——简单 RAG，零外部依赖**：
 - 按段落切分记忆文件；会话启动时建立索引
 - 纯标准库 **TF-IDF**（分词 → 词频 → IDF → 余弦相似度）——约 80 行可实现，
@@ -233,6 +256,30 @@ handler}`。注册表生成 API 所需的 `tools=` 载荷。
 **取舍说明**：embeddings 版 RAG（质量更好，但需要外部 API + 密钥 + 成本）
 vs TF-IDF（免费、离线、对学习项目透明）。v1 推荐 TF-IDF——向量/embedding
 路径是日后干净的升级方向。
+
+### 4.12 MCP 支持（mcp.py）
+
+通过官方 `mcp` Python 包（Model Context Protocol）连接外部 MCP 服务器，
+将服务器的工具动态注册进 `TOOL_REGISTRY`——注册后与内置工具走同一条
+流水线（护栏 → 沙箱 → 钩子 → 执行），无需特殊处理。
+
+配置（config.py 中的 `mcp` 段，或独立 `mcp.json`）：
+
+```json
+{
+  "mcp": {
+    "filesystem": { "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "./"] },
+    "remote": { "url": "https://example.com/mcp" }
+  }
+}
+```
+
+- `stdio` 服务器：子进程方式启动（默认）；`url` 服务器：HTTP 方式连接
+- 会话启动时连接服务器并列出工具；每个 MCP 工具封装为注册表条目
+  （schema 原样透传，handler 转发调用）
+- v1 只支持**工具**（tools），不支持 resources / prompts 通道
+- 连接失败：记录警告，该服务器本会话停用，其余服务器不受影响
+- 会话结束时关闭连接 / 终止子进程
 
 ## 5. 工具流水线（每次工具调用）
 
@@ -254,7 +301,7 @@ vs TF-IDF（免费、离线、对学习项目透明）。v1 推荐 TF-IDF——�
 - API 错误（密钥错误、限流、网络）：给出明确提示；会话继续存活
 - 工具异常：格式化的错误作为工具结果返回给模型（模型可自我纠正）；绝不崩溃
 - 护栏拒绝 / 钩子异常：拒绝优先；钩子错误只记日志
-- Ctrl+C：干净退出；触发 `SessionEnd`（保存转录）
+- Ctrl+C：干净退出；触发 `SessionEnd`（保存转录），随后执行记忆整合
 
 ## 7. 测试（pytest，无网络）
 
@@ -270,6 +317,9 @@ vs TF-IDF（免费、离线、对学习项目透明）。v1 推荐 TF-IDF——�
 - 记忆/RAG 测试：memory_save 落盘、TF-IDF 检索命中/相关性排序、
   启动时自动注入 top-2
 - 压缩测试：历史超出预算触发总结压缩、保留最近回合、压缩步数上限
+- MCP 测试：假 stdio 服务器（测试脚本内），断言工具列出/注册/schema 透传/
+  调用转发/连接失败时优雅停用
+- 收尾顺序测试：任务结束时 SessionEnd 钩子先于记忆整合执行
 
 ## 8. 未决事项
 
