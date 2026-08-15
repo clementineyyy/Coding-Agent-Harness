@@ -43,6 +43,7 @@ L4 交付
 - **测试绝不联网**，不使用真实 LLM；LLM 一律用 `harness/fake_llm.py` 的 `FakeLLM` 或注入的假客户端。
 - 凭据铁律：key 绝不硬编码进源码、绝不进 git（含历史）、绝不进日志/转录/测试夹具；`.env`、`transcripts/`、`memory/` 在 `.gitignore` 中。
 - 所有文件 UTF-8 编码（无 BOM）；中文注释允许。
+- **spec §3.2 内置工具目录 ↔ 实现名映射**：`bash`→`bash`；`files`→`read_file`/`write_file`；`search`→`glob`/`grep`；`web`→`web`（fetch_url 语义）；`notes`→`notes_append`/`notes_list`；`memory_save`/`memory_search` 同名；`run_subagent` 同名；`ask_user`→`ask`；`list_skills`/`load_skill` 同名。实现以 spec §3.2 目录表（功能/参数/返回/护栏覆盖）为权威。
 - 模型固定 `deepseek-chat`，`base_url=https://api.deepseek.com`，仅 HTTPS。
 - 默认参数（spec §3）：步数上限 50、连续失败预算 3、工具超时 30s（测试用 1s）、记忆 top-2、压缩保留最近 10 回合、子智能体步数上限 30、token 估算字符数/4。
 - 危险 bash 模式内置 deny 清单（`rm -rf` 系统路径、fork 炸弹）；工作区外写入 deny；`network_enabled` 切换必须 ask。
@@ -1345,7 +1346,7 @@ git commit -m "feat: agent loop with guardrail-first tool pipeline"
 
 ## Task 20: 反馈循环（反思 + 失败注入 + 失败预算）
 
-**目标**：工具失败/拒绝后模型先输出反思再继续（spec 3.6）；**注入一次失败后断言下一条动作改变**（§9 3.6 收紧版验收）；连续同类失败预算 3 → 停止并汇总报告。
+**目标**：工具失败/拒绝后模型先输出反思再继续（spec 3.6 客观反馈信号：`status`/`exit_code`/`output`/`error` + 护栏拒绝 reason 均作为 tool 消息回灌给模型）；**注入一次失败后断言下一条动作改变**（§9 3.6 收紧版验收）；连续同类失败预算 3 → 停止并汇总报告。
 
 **涉及文件**
 - Modify: `harness/agent.py`（run 迭代中注入反馈、失败计数与预算）、`harness/tests/test_agent_feedback.py`
