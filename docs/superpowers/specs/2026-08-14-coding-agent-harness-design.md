@@ -373,9 +373,10 @@ SessionEnd 钩子，并让每次会话的转录落盘，以便观察和审计智
 - 约束：`network_enabled` 切换必须经护栏 ask；docker 未安装时快速报错
 
 **HITL 状态机**
-- 字段：`state`（idle/running/awaiting_user/paused/completed/terminated）、
+- 字段：`state`（idle/running/executing/awaiting_user/paused/completed/terminated）、
   `event_history[]`
-- 约束：转移表驱动，非法转移抛错；事件携带来源（guardrail/agent/user/loop）
+- 约束：转移表驱动，非法转移抛错；事件携带来源（guardrail/agent/user/loop）；
+  完整转移规则与状态图见 §11.4
 
 **实体关系**：Agent 会话 1—N Message；assistant Message 1—N ToolCall；
 ToolCall 1—1 ToolResult；会话 1—N PolicyRule；会话 1—N HookRecord；
@@ -586,18 +587,51 @@ MCP 工具、技能触发的调用）。护栏是流水线第一环，先于沙�
 表驱动转移（`(state, event) → next state`）：
 
 ```
-状态：idle, running, awaiting_user, paused, completed, terminated
+状态：idle, running, executing, awaiting_user, paused, completed, terminated
 事件：task_submitted, tool_requested, approval_needed, user_answered,
-      agent_question, interrupt, resume, abort, final_answer, error
+      agent_question, interrupt, resume, abort, final_answer,
+      tool_finished, error
 
 idle + task_submitted → running
-running + approval_needed → awaiting_user     （护栏 ask）
-running + agent_question → awaiting_user      （ask_user 工具）
+running + tool_requested → executing               （护栏放行后进入执行段）
+running + approval_needed → awaiting_user          （护栏 ask）
+running + agent_question → awaiting_user           （ask_user 工具）
+running + interrupt → paused
+running + final_answer → completed
+executing + tool_finished → running                （成功/失败/超时均回 running）
+executing + interrupt → paused                     （先终止子进程）
+executing + abort → terminated
 awaiting_user + user_answered → running
 awaiting_user + abort → terminated
-running + interrupt → paused；paused + resume → running；paused + abort → terminated
-running + final_answer → completed；completed + task_submitted → running
-任意 + error → running（可恢复）；会话不可用 → terminated
+paused + resume → running；paused + abort → terminated
+completed + task_submitted → running
+任意非终结状态 + error → running（可恢复）；会话不可用 → terminated
+```
+
+```mermaid
+stateDiagram-v2
+    [*] --> idle
+    idle --> running : task_submitted
+    running --> executing : tool_requested（护栏放行）
+    running --> awaiting_user : approval_needed（护栏 ask）
+    running --> awaiting_user : agent_question（ask_user 工具）
+    running --> paused : interrupt
+    running --> completed : final_answer
+    executing --> running : tool_finished（成功/失败/超时）
+    executing --> paused : interrupt（先终止子进程）
+    executing --> terminated : abort
+    awaiting_user --> running : user_answered
+    awaiting_user --> terminated : abort
+    paused --> running : resume
+    paused --> terminated : abort
+    completed --> running : task_submitted（新任务）
+    running --> running : error（可恢复）
+    executing --> running : error（可恢复）
+    awaiting_user --> running : error（可恢复）
+    paused --> running : error（可恢复）
+    completed --> running : error（可恢复）
+    note right of terminated : 会话不可用（外部条件）或 abort 到达终结态
+    terminated --> [*]
 ```
 
 事件携带来源（guardrail / agent / user / loop），REPL 据此渲染不同交互
@@ -641,6 +675,7 @@ class StateMachine:
 # sandbox.py —— 执行器接口
 class Sandbox:
     def run(self, command: str, timeout: int) -> SandboxResult
+    def cancel(self, call_id: str) -> None    # 终止在途子进程（interrupt/abort 用）
     network_enabled: bool
 class LocalSandbox(Sandbox): ...      # 宿主子进程
 class DockerSandbox(Sandbox): ...     # 桩：未安装 → 快速报错
@@ -655,8 +690,10 @@ def pipeline(self, call: ToolCall) -> ToolResult:
     if verdict.action == "deny":
         return ToolResult(error=f"guardrail denied: {verdict.reason}")
     args, ok = self.hooks.pre_tool_use(call.name, call.args) # 5 钩子
-    result = self.sandbox.run_tool(call.name, args)          # 6 执行
-    self.hooks.post_tool_use(call.name, args, result)        # 7 钩子
+    self.state.fire("tool_requested", "loop")                 # 5.5 状态机：进入执行段
+    result = self.sandbox.run_tool(call.name, args)           # 6 执行
+    self.state.fire("tool_finished", "loop")                  # 6.5 状态机：执行结束
+    self.hooks.post_tool_use(call.name, args, result)         # 7 钩子
     return result
 ```
 
