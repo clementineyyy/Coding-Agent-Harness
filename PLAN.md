@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+（Windows）、标准库为主、`openai` SDK（DeepSeek 兼容协议）、`requests`、`mcp`、`keyring`、`pytest`。无 TUI 框架、无异步、无 embeddings。
 
-**Spec:** `docs/superpowers/specs/2026-08-14-coding-agent-harness-design.md`（计划从 spec 论证，执行者须同时阅读 spec 与本计划）
+**Spec:** `docs/superpowers/specs/SPEC.md`（计划从 spec 论证，执行者须同时阅读 spec 与本计划）
 
 ---
 

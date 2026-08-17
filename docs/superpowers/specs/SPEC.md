@@ -215,42 +215,7 @@ Ctrl+C 干净退出并触发 SessionEnd。
 
 ### 5.1 组件图
 
-```mermaid
-flowchart TD
-    subgraph UI["交互层"]
-        REPL["REPL main.py<br/>任务输入 / 流式输出 / HITL 菜单 / REPL 命令"]
-    end
-    subgraph CORE["核心"]
-        AGENT["Agent agent.py<br/>三阶段循环：开始 → 迭代 → 收尾<br/>持有消息历史 / 步数计数 / token 预算"]
-        PIPE["工具流水线（见 5.2）"]
-        CTX["上下文工程<br/>memory / RAG / 压缩 / 预算"]
-        STATE["HITL 状态机 state.py"]
-    end
-    subgraph SAFE["安全与执行"]
-        GRD["护栏与策略<br/>guardrails.py / policy.py"]
-        HOOK["钩子 hooks.py"]
-        SBX["沙箱 sandbox.py"]
-    end
-    LLM["LLM llm.py"]
-    API["DeepSeek API<br/>api.deepseek.com"]
-    TOOLS["工具注册表<br/>tools/ + MCP(mcp.py)"]
-    MEM["记忆库 memory/"]
-
-    REPL -->|任务 / 控制 / 回答| AGENT
-    AGENT -->|流式输出 / HITL 菜单| REPL
-    AGENT -->|调用（流式）| LLM
-    LLM -->|HTTPS| API
-    AGENT -->|tool_calls| PIPE
-    AGENT -->|注入 / 压缩 / 预算| CTX
-    AGENT -->|事件 tool_requested 等| STATE
-    PIPE -->|判定 allow / ask / deny| GRD
-    GRD -->|approval_needed（ask）| STATE
-    STATE -->|HITL 菜单渲染| REPL
-    PIPE -->|Pre / PostToolUse 钩子| HOOK
-    PIPE -->|执行（超时 30s）| SBX
-    SBX -->|run_tool| TOOLS
-    CTX -->|检索 / 整合| MEM
-```
+![组件图](assets/Gemini_Generated_Image_y9hi41y9hi41y9hi.jpg)
 
 职责划分：Agent 只负责循环与状态；工具流水线只负责"一次调用"的判定-执行；
 护栏/策略/钩子/沙箱各自单一职责；状态机是交互主轴。模块间通过普通函数调用
