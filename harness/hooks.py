@@ -6,11 +6,13 @@ from harness.transcript import default_session_end_hook
 
 class HookBus:
     def __init__(self, transcript_dir=None):
+        self.transcript_dir = transcript_dir
+        self.session_data: dict = {"tool_calls": [], "policy_changes": []}
         self._hooks: dict[str, list[Callable]] = {}
         self._records: list[dict] = []
         self.errors: list[str] = []
         if transcript_dir is not None:
-            self.register("session_end", default_session_end_hook(transcript_dir))
+            self.register("session_end", default_session_end_hook(transcript_dir, self.session_data))
 
     def register(self, name: str, fn: Callable) -> None:
         self._hooks.setdefault(name, []).append(fn)

@@ -18,9 +18,15 @@ def write_transcript(
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def default_session_end_hook(transcript_dir: Path):
+def default_session_end_hook(transcript_dir: Path, session_data: dict | None = None):
     def hook(messages: list[dict]) -> None:
         path = transcript_dir / f"{datetime.now().strftime('%Y-%m-%dT%H-%M-%S-%f')}.json"
-        write_transcript(path, messages, [], [])
+        data = session_data or {}
+        write_transcript(
+            path,
+            messages,
+            data.get("tool_calls", []),
+            data.get("policy_changes", []),
+        )
 
     return hook

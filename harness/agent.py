@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -39,6 +40,7 @@ class AgentResult:
     policy_changes: list[dict] = field(default_factory=list)
     messages: list[dict] = field(default_factory=list)
     failed_sequence: int = 0
+    transcript_path: str | None = None
 
 
 class Agent:
@@ -64,6 +66,8 @@ class Agent:
         self.config = config
         self.ask_callback = ask_callback
         self._compress_calls = 0
+        self.warnings: list[str] = []
+        self._tool_calls: list[dict] = []
 
     def context_for_tool(self) -> Context:
         return Context(
@@ -190,6 +194,7 @@ class Agent:
         fail_tool: str | None = None
         max_fail_seq = 0
         self._compress_calls = 0
+        self._tool_calls = []
         self.state.fire("task_submitted", "loop")
         while result.steps_used < self.config.max_steps:
             if self._check_budget(messages):
@@ -200,11 +205,7 @@ class Agent:
                 final = response.text or "任务完成"
                 messages.append({"role": "assistant", "content": final})
                 result.text = final
-                result.messages = messages
-                self.messages = messages
-                result.failed_sequence = max_fail_seq
-                self.state.fire("final_answer", "loop")
-                return result
+                return self._finish(result, messages, max_fail_seq)
             assistant_call = []
             for i, call in enumerate(response.tool_calls):
                 assistant_call.append({
@@ -225,6 +226,7 @@ class Agent:
                 tool_id = f"call_{call_uid - len(response.tool_calls) + i}"
                 tool_result = self.pipeline(call, self.context_for_tool())
                 result.tool_results.append(tool_result)
+                self._tool_calls.append({"name": call["name"], "arguments": call["arguments"]})
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_id,
@@ -249,22 +251,64 @@ class Agent:
                         )
                         messages.append({"role": "assistant", "content": final})
                         result.text = final
-                        result.messages = messages
-                        self.messages = messages
-                        result.failed_sequence = max_fail_seq
-                        self.state.fire("final_answer", "loop")
-                        return result
+                        return self._finish(result, messages, max_fail_seq)
                 else:
                     fail_seq = 0
                     fail_tool = None
         final = f"达到步数上限 {self.config.max_steps}，任务终止，未挂死。"
         messages.append({"role": "assistant", "content": final})
         result.text = final
+        return self._finish(result, messages, max_fail_seq)
+
+    def _finish(self, result: AgentResult, messages: list[dict], max_fail_seq: int) -> AgentResult:
         result.messages = messages
         self.messages = messages
         result.failed_sequence = max_fail_seq
         self.state.fire("final_answer", "loop")
+        self._finalize(result)
         return result
+
+    def _finalize(self, result: AgentResult) -> None:
+        self.hooks.session_data["tool_calls"] = list(self._tool_calls)
+        self.hooks.session_data["policy_changes"] = self.policy.changes()
+        self.hooks.session_end(self.messages)
+        if self.hooks.transcript_dir is not None:
+            files = [p for p in Path(self.hooks.transcript_dir).glob("*.json")]
+            if files:
+                result.transcript_path = str(
+                    max(files, key=lambda p: p.stat().st_mtime)
+                )
+        if self.memory is not None and self.llm is not None:
+            self._consolidate()
+
+    def _consolidate(self) -> None:
+        try:
+            response = self.llm.complete(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "请总结本次会话的关键事实、决策与工具结果，"
+                            "作为长期记忆保存："
+                        ),
+                    }
+                ]
+                + self.messages,
+                tools=[],
+            )
+        except Exception as exc:
+            self.warnings.append(f"memory consolidation failed: {exc}")
+            return
+        summary = (response.text or "").strip()
+        if not summary:
+            self.warnings.append("memory consolidation skipped: empty summary")
+            return
+        try:
+            self.memory.save(
+                f"session-summary-{datetime.now():%Y%m%d-%H%M%S}", summary
+            )
+        except Exception as exc:
+            self.warnings.append(f"memory save failed: {exc}")
 
     @staticmethod
     def _result_to_dict(tool_result) -> dict:
