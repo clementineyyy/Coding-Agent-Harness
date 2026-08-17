@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,7 +98,7 @@ class DockerSandbox(Sandbox):
             raise DockerUnavailableError(
                 "docker CLI not found on PATH; install Docker or fall back to LocalSandbox"
             )
-        cidfile = tempfile.mkstemp(prefix="harness-cid-", suffix=".txt")[1]
+        cidfile = os.path.join(tempfile.gettempdir(), f"harness-cid-{uuid.uuid4().hex}.txt")
         argv = [docker, "run", "--rm"]
         if not self.network_enabled:
             argv.append("--network=none")

@@ -46,6 +46,17 @@ def test_docker_command_build(tmp_path):
     assert r.exit_code == 0 and "ok" in r.stdout
 
 
+def test_docker_cidfile_does_not_preexist(tmp_path):
+    """docker 要求 --cidfile 指向不存在的文件（否则 exit 125 "container ID file found"）。"""
+    sb = DockerSandbox(workspace=tmp_path)
+    with patch("harness.sandbox.subprocess.run") as m:
+        m.return_value = SimpleNamespace(stdout="ok", stderr="", returncode=0)
+        sb.run("echo hi", timeout=5)
+    argv = m.call_args.args[0]
+    cidfile = Path(argv[argv.index("--cidfile") + 1])
+    assert not cidfile.exists()
+
+
 def test_docker_network_enabled_omits_flag(tmp_path):
     sb = DockerSandbox(workspace=tmp_path, network_enabled=True)
     with patch("harness.sandbox.subprocess.run") as m:
