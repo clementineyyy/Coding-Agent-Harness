@@ -1,2 +1,9 @@
 coding-agent-harness/
 .worktrees/
+.env
+transcripts/
+memory/
+__pycache__/
+.pytest_cache/
+*.pyc
+.venv/
