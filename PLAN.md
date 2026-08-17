@@ -541,9 +541,9 @@ git commit -m "feat: hook bus with transcript default session-end hook"
 
 ---
 
-## Task 8: 沙箱 sandbox.py（LocalSandbox 子进程 + Docker 桩）
+## Task 8: 沙箱 sandbox.py（LocalSandbox 子进程 + Docker 后端）
 
-**目标**：`Sandbox.run(command, timeout)` 捕获 stdout/stderr/exit_code，超时杀进程，`cancel(call_id)` 终止在途进程；`network_enabled` 标志；DockerSandbox 桩快速报错。
+**目标**：`Sandbox.run(command, timeout)` 捕获 stdout/stderr/exit_code，超时杀进程，`cancel(call_id)` 终止在途进程；`network_enabled` 标志；DockerSandbox 真实实现（本机已装 Docker Desktop，spec §11.3）。
 
 **涉及文件**
 - Create: `harness/sandbox.py`、`harness/tests/test_sandbox.py`
@@ -552,11 +552,13 @@ git commit -m "feat: hook bus with transcript default session-end hook"
 - Produces:
   - `@dataclass class SandboxResult`：`stdout: str`、`stderr: str`、`exit_code: int`、`duration_ms: int`、`truncated: bool`
   - `class Sandbox(ABC)`：`network_enabled: bool`；`run(command: str, timeout: int) -> SandboxResult`（abstract）；`cancel(call_id: str) -> None`（abstract）
-  - `class LocalSandbox(Sandbox)`：`__init__(network_enabled=False, max_output_bytes=51200)`；`run` 用 `subprocess.run(command, shell=True, capture_output=True, text=True, timeout=timeout)`；超时 `subprocess.TimeoutExpired` → 返回 exit_code=-1、stderr 含 "timeout"；stdout/stderr 超限截断（`truncated=True`，截断标记）；`cancel(call_id)`：维护 `_running: dict[call_id, Popen]`？——run 为阻塞调用，cancel 语义先以"记录已执行 + 幂等"实现，真实中断由 REPL Ctrl+C 层处理（T24）；`class DockerSandbox(Sandbox)`：桩——`run` 抛 `NotImplementedError("docker backend not available")`（spec：未安装 Docker 快速报错）。
+  - `class LocalSandbox(Sandbox)`：`__init__(network_enabled=False, max_output_bytes=51200)`；`run` 用 `subprocess.run(command, shell=True, capture_output=True, text=True, timeout=timeout)`；超时 `subprocess.TimeoutExpired` → 返回 exit_code=-1、stderr 含 "timeout"；stdout/stderr 超限截断（`truncated=True`，截断标记）；`cancel(call_id)`：维护 `_running: dict[call_id, Popen]`？——run 为阻塞调用，cancel 语义先以"记录已执行 + 幂等"实现，真实中断由 REPL Ctrl+C 层处理（T24）
+  - `class DockerUnavailableError(RuntimeError)`：docker CLI 缺失或 daemon 未运行（spec：未安装快速报错）
+  - `class DockerSandbox(Sandbox)`：`__init__(workspace: Path, image="python:3.11-slim", network_enabled=False, max_output_bytes=51200)`；`run` 构造 `docker run --rm --network=none -v <workspace>:/workspace <image> sh -c "<command>"`（`network_enabled=True` 时去掉 `--network=none`）；用 `subprocess.run(args_list, capture_output=True, text=True, timeout=timeout)`；先 `shutil.which("docker")` 检查，缺失 → 抛 `DockerUnavailableError`；超时 → 杀 docker CLI 子进程并尝试 `docker stop` 清理容器；`cancel` 语义同 LocalSandbox。
 
 **依赖**：T1。**并行**：P2 第一个（可与 P1/P3 并行）。
 
-**实现要点**：Windows 下 `shell=True`；timeout 用 `subprocess.TimeoutExpired`；输出截断用 `out[:max] + b"...[truncated]"`（注意 text=True 已解码）；`truncated` 在任一流超限时置 True。
+**实现要点**：Windows 下 `shell=True`（仅 LocalSandbox；DockerSandbox 用参数列表，不经 shell）；timeout 用 `subprocess.TimeoutExpired`；输出截断用 `out[:max] + b"...[truncated]"`（注意 text=True 已解码）；`truncated` 在任一流超限时置 True；DockerSandbox 单测**绝不依赖真实 docker**（全局约束"测试绝不联网"）——mock `subprocess.run` 断言命令构造（含 `--network=none`、`-v` 挂载）；可选集成测试用 `@pytest.mark.skipif(shutil.which("docker") is None)` 标记（"容器内 rm -rf 不伤宿主"），不进 CI 默认集。
 
 **验证步骤**
 - [ ] **Step 1: 写失败测试**
@@ -583,14 +585,26 @@ def test_output_truncation():
     r = sb.run("python -c \"print('x'*100)\"", timeout=5)
     assert r.truncated and len(r.stdout) <= 16 + len("[...truncated]")
 
-def test_docker_stub_errors():
-    with pytest.raises(NotImplementedError):
-        DockerSandbox().run("echo hi", timeout=5)
+def test_docker_missing_cli_errors(tmp_path):
+    sb = DockerSandbox(workspace=tmp_path)
+    with patch("shutil.which", return_value=None):
+        with pytest.raises(DockerUnavailableError):
+            sb.run("echo hi", timeout=5)
+
+def test_docker_command_build(tmp_path):
+    from unittest.mock import patch, SimpleNamespace
+    sb = DockerSandbox(workspace=tmp_path, image="python:3.11-slim")
+    with patch("harness.sandbox.subprocess.run") as m:
+        m.return_value = SimpleNamespace(stdout="ok", stderr="", returncode=0)
+        r = sb.run("echo hi", timeout=5)
+    argv = m.call_args.args[0]
+    assert "--network=none" in argv and f"{tmp_path}:/workspace" in " ".join(argv)
+    assert r.exit_code == 0 and "ok" in r.stdout
 ```
 
 - [ ] **Step 2: 运行确认失败**：`python -m pytest harness/tests/test_sandbox.py -v` → FAIL
 
-- [ ] **Step 3: 最小实现**：按接口实现；`LocalSandbox.__init__` 默认 `network_enabled=False`。
+- [ ] **Step 3: 最小实现**：按接口实现；`LocalSandbox.__init__` 默认 `network_enabled=False`；DockerSandbox 用参数列表构造 docker 命令（不经 shell），`shutil.which("docker")` 前置检查。
 
 - [ ] **Step 4: 运行确认通过**：`python -m pytest harness/tests/test_sandbox.py -v` → PASS
 
@@ -598,7 +612,7 @@ def test_docker_stub_errors():
 
 ```bash
 git add harness/sandbox.py harness/tests/test_sandbox.py
-git commit -m "feat: local sandbox subprocess runner with timeout and docker stub"
+git commit -m "feat: sandbox with local subprocess and docker backends"
 ```
 
 ---
@@ -1823,7 +1837,7 @@ git commit -m "feat: acceptance matrix, credential scan and perf smoke tests"
 
 ## Task 27: README 与文档收尾
 
-**目标**：README：快速开始（pip install / 配置 key / 运行）、凭据安全说明（keyring、.env 明文风险）、代理配置（GitHub/DeepSeek 网络）、架构一页图、六维度各组件说明、`/`命令表、测试运行方式、沙箱非隔离性声明、Docker 桩说明；组件理论文档（每组件一节：它验证什么理论）。
+**目标**：README：快速开始（pip install / 配置 key / 运行）、凭据安全说明（keyring、.env 明文风险）、代理配置（GitHub/DeepSeek 网络）、架构一页图、六维度各组件说明、`/`命令表、测试运行方式、沙箱非隔离性声明、Docker 后端说明（可选，默认 local）；组件理论文档（每组件一节：它验证什么理论）。
 
 **涉及文件**
 - Create/Modify: `README.md`、`docs/COMPONENTS.md`

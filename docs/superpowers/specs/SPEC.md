@@ -1,22 +1,16 @@
 # 编码智能体框架（Coding Agent Harness）— 设计规格
 
-- 日期：2026-08-14
-- 状态：草稿
-- 环境：Windows，Python 3.11+，模型通过 DeepSeek API（兼容 OpenAI 协议）调用
-
 ## 1. 问题陈述（Questions Statement）
 
 ### 1.1 我们想解决什么问题
 
-现有智能体框架（opencode、Claude Code）强大但不透明：成百上千个组件相互
-交互。你很难看清护栏、钩子、记忆与循环到底如何协同——也难以试验替代设计。
+现有智能体框架（opencode、Claude Code）强大但不透明：成百上千个组件相互互。你很难看清护栏、钩子、记忆与循环到底如何协同——也难以试验替代设计。
 阅读文档和架构图不算验证。
 
-从零开始、一步步构建一个"最小但真实"的编码智能体框架，让每个组件透明且
-可测试——然后用它**验证关于此类系统如何运作的理论**。
+从零开始、一步步构建一个"最小但真实"的编码智能体框架，让每个组件透明且测试——然后用它**验证关于此类系统如何运作的理论**。
 
 核心论点：一个可用的框架需要**六个相互依存的维度**，缺一不可，而有趣的
-工程问题恰恰在于它们如何整合：
+问题恰恰在于它们如何整合：
 
 1. **纯 LLM** — 模型 API 交互（DeepSeek，兼容 OpenAI 协议）
 2. **工具** — 注册表、JSON schema、执行
@@ -24,10 +18,6 @@
 4. **钩子与护栏** — 安全边界、自适应策略、HITL（投入最深，见 §11）
 5. **子智能体与技能** — 递归循环与可加载指令
 6. **反馈循环** — 失败感知、自我反思、修正
-
-**范围与非目标（v1 不做）**：无 Docker 后端（桩实现）、无多用户/认证/远程
-访问、无 embeddings/向量数据库（TF-IDF）、策略不跨会话持久化、无异步框架
-（同步单线程）、无 TUI 框架（纯终端 REPL）。
 
 ### 1.2 目标用户是谁
 
@@ -46,51 +36,33 @@
 Valuable（对用户有明确价值）、Estimable（可估算）、Small（足够小）、
 Testable（附验收标准）。
 
-**US-1（循环/LLM/工具）** 作为用户，我想给智能体一个编码任务
+**1（循环/LLM/工具）** 作为用户，我想给智能体一个编码任务
 （如"修复 main.py 里的 bug"），让它自主使用工具完成并实时流式输出进度，
 以便把编码工作委托出去。
 验收：任务以最终答案结束；工具调用行内可见；步数上限生效并给出明确提示。
 
-**US-2（护栏）** 作为用户，我想让每次工具调用都经过护栏
-（allow / ask / deny），以便危险操作（`rm -rf`、工作区外写入）未经我同意
-绝不执行。
+**2（护栏）** 作为用户，我想让每次工具调用都经过护栏
+（allow / ask / deny），以便危险操作（`rm -rf`、工作区外写入）未经我同意不执行。
 验收：危险 bash 模式默认 deny；工作区外写入 deny；ask 触发交互菜单。
 
-**US-3（自适应策略）** 作为用户，我想用 y/n、"总是允许"/"绝不允许"回答
+**3（自适应策略）** 作为用户，我想用 y/n、"总是允许"/"绝不允许"回答
 ask 提示，并让策略在会话内自适应，以便同一模式不再反复打断我。
 验收："总是允许"把该规则降级为 allow；同一模式被拒绝两次自动升级为 deny。
 
-**US-4（HITL 状态机）** 作为用户，我想在任务中途暂停、中断、恢复或中止
-智能体，以便始终掌控会话。
+**4（HITL 状态机）** 作为用户，我想在任务中途暂停、中断、恢复或中止能体，以便始终掌控会话。
 验收：interrupt→paused、resume→running、abort→terminated；
 Ctrl+C 干净退出并触发 SessionEnd。
 
-**US-5（ask_user）** 作为用户，我想让智能体在需求不清或计划有风险时主动
+**5 （ask_user）** 作为用户，我想让智能体在需求不清或计划有风险时主动
 暂停并提问，以便在造成损失前澄清。
 验收：ask_user 渲染编号菜单；回答作为工具结果返回；状态机经 awaiting_user。
 
-**US-6（记忆/RAG）** 作为用户，我想让智能体跨会话记住项目事实，并在新任务
-开始时自动检索相关记忆，以便不必每次重复交代背景。
-验收：memory_save 写入 `memory/` 落盘；任务启动自动注入 top-2；
-memory_search 返回相关块。
-
-**US-7（技能）** 作为用户，我想加载 SKILL.md 技能文件，其声明的规则只能
-收紧策略，以便塑造智能体行为而不削弱安全。
+**6（技能）** 作为用户，我想加载 SKILL.md 技能文件，其声明的规则只能紧策略，以便塑造智能体行为而不削弱安全。
 验收：技能规则仅接受 ask/deny；声明 allow 被拒绝并警告；违规部分被丢弃。
 
-**US-8（MCP）** 作为用户，我想连接外部 MCP 服务器，使其工具进入同一条
-工具流水线，以便安全地扩展能力。
-验收：会话启动时列出并注册 MCP 工具；schema 原样透传；连接失败时该服务器
-优雅停用，其余不受影响。
-
-**US-9（子智能体）** 作为用户，我想派发子智能体处理子任务（独立上下文、
+**7（多智能体）** 作为用户，我想派发子智能体处理子任务（独立上下文、
 独立步数上限），以便隔离地分解工作。
 验收：子任务返回最终答案；父/子上下文互不污染；子智能体继承护栏/钩子/策略。
-
-**US-10（钩子/转录）** 作为用户，我想注册 PreToolUse / PostToolUse /
-SessionEnd 钩子，并让每次会话的转录落盘，以便观察和审计智能体行为。
-验收：钩子顺序 guardrail → PreToolUse → tool → PostToolUse；
-转录写入 `transcripts/<时间戳>.json`；SessionEnd 先于记忆整合执行。
 
 ## 3. 功能规格（Function Specification）
 
@@ -114,7 +86,7 @@ SessionEnd 钩子，并让每次会话的转录落盘，以便观察和审计智
 - **输入**：模型发出的 `tool_calls`（工具名 + JSON 参数）
 - **行为**：注册表查表 → 参数 JSON 校验 → 按工具选择沙箱执行器 → 执行
   （超时）→ 结果返回
-- **动作即工具调用**：agent 对世界的一切干预都通过工具完成。v1 内置工具
+- **动作即工具调用**：agent 对世界的一切干预都通过工具完成。内置工具
   目录如下（MCP 服务器动态注册的工具走同一流水线，见 §3.5）：
 
 | 工具 | 功能（agent 能做什么） | 关键参数 | 返回内容 | 护栏覆盖 |
@@ -243,43 +215,46 @@ SessionEnd 钩子，并让每次会话的转录落盘，以便观察和审计智
 
 ### 5.1 组件图
 
-```
-┌───────────────────────────────────────────────────────────────┐
-│                     REPL（main.py）                           │
-│   任务输入 / 流式输出 / HITL 菜单 / /exit /reset /skills      │
-│   /rules /rules drop /key 系列命令                           │
-└───────────────────────────┬───────────────────────────────────┘
-                            │ 任务 / 控制 / 回答
-┌───────────────────────────▼───────────────────────────────────┐
-│                    Agent（agent.py）                          │
-│    三阶段循环：开始(上下文工程) → 迭代(模型×工具) → 收尾      │
-│    持有：消息历史、步数计数、token 预算                       │
-└──┬───────────┬──────────────┬──────────────┬──────────────────┘
-   │           │              │              │
-┌──▼───┐  ┌────▼────┐   ┌─────▼─────┐  ┌────▼─────┐
-│LLM   │  │工具流水线│   │上下文工程  │  │HITL 状态机│
-│llm.py│  │(见5.2)  │   │memory/RAG  │  │state.py  │
-└──┬───┘  └────┬────┘   │压缩/预算   │  └────┬─────┘
-   │           │        └───────────┘       │
-   │  HTTPS    │         ┌──────────┐        │
-   │  ┌────────▼──┐      │ guardrails.py │   │
-   │  │ 护栏/策略  │      └──────────┘      │
-   │  │ policy.py │      ┌──────────┐       │
-   │  │ hooks.py   │      │ sandbox.py│     │
-   │  └───────────┘      └──────────┘      │
-┌──▼───────────────────┐                   │
-│ DeepSeek API         │  ┌────────────────▼──┐
-│ api.deepseek.com     │  │ 工具注册表 tools/   │
-└──────────────────────┘  │ bash/files/search/ │
-                          │ web/notes/memory/  │
-                          │ subagent/ask/      │
-                          │ skills/ + MCP(mcp.py)│
-                          └───────────────────┘
+```mermaid
+flowchart TD
+    subgraph UI["交互层"]
+        REPL["REPL main.py<br/>任务输入 / 流式输出 / HITL 菜单 / REPL 命令"]
+    end
+    subgraph CORE["核心"]
+        AGENT["Agent agent.py<br/>三阶段循环：开始 → 迭代 → 收尾<br/>持有消息历史 / 步数计数 / token 预算"]
+        PIPE["工具流水线（见 5.2）"]
+        CTX["上下文工程<br/>memory / RAG / 压缩 / 预算"]
+        STATE["HITL 状态机 state.py"]
+    end
+    subgraph SAFE["安全与执行"]
+        GRD["护栏与策略<br/>guardrails.py / policy.py"]
+        HOOK["钩子 hooks.py"]
+        SBX["沙箱 sandbox.py"]
+    end
+    LLM["LLM llm.py"]
+    API["DeepSeek API<br/>api.deepseek.com"]
+    TOOLS["工具注册表<br/>tools/ + MCP(mcp.py)"]
+    MEM["记忆库 memory/"]
+
+    REPL -->|任务 / 控制 / 回答| AGENT
+    AGENT -->|流式输出 / HITL 菜单| REPL
+    AGENT -->|调用（流式）| LLM
+    LLM -->|HTTPS| API
+    AGENT -->|tool_calls| PIPE
+    AGENT -->|注入 / 压缩 / 预算| CTX
+    AGENT -->|事件 tool_requested 等| STATE
+    PIPE -->|判定 allow / ask / deny| GRD
+    GRD -->|approval_needed（ask）| STATE
+    STATE -->|HITL 菜单渲染| REPL
+    PIPE -->|Pre / PostToolUse 钩子| HOOK
+    PIPE -->|执行（超时 30s）| SBX
+    SBX -->|run_tool| TOOLS
+    CTX -->|检索 / 整合| MEM
 ```
 
 职责划分：Agent 只负责循环与状态；工具流水线只负责"一次调用"的判定-执行；
 护栏/策略/钩子/沙箱各自单一职责；状态机是交互主轴。模块间通过普通函数调用
-与事件（hooks）通信，无隐藏全局状态（策略与记忆为显式注入的会话对象）。
+与事件（hooks）通信（策略与记忆为显式注入的会话对象）。
 
 ### 5.2 数据流
 
@@ -306,7 +281,7 @@ SessionEnd 钩子，并让每次会话的转录落盘，以便观察和审计智
 工具调用请求（name, args）
   → 护栏判定 allow|ask|deny      （guardrails.py × policy.py）
       ask → 状态机 → awaiting_user → HITL 菜单 → 回答反馈回策略
-  → 沙箱执行器选择                （sandbox.py：local / docker-桩）
+  → 沙箱执行器选择                （sandbox.py：local / docker）
   → PreToolUse 钩子               （hooks.py：观察/修改，不能复活）
   → 执行（超时 30s）
   → PostToolUse 钩子              （hooks.py：观察/记录）
@@ -325,9 +300,8 @@ SessionEnd 钩子，并让每次会话的转录落盘，以便观察和审计智
 | `requests` | Python 包 | fetch_url 工具 | 响应大小上限 |
 | `mcp` | Python 包 | MCP 服务器连接（stdio/url） | 工具动态注册 |
 | `keyring` | Python 包 | 操作系统凭据库（Windows Credential Manager） | 密钥安全存储 |
+| Docker Desktop + `python:3.11-slim` 等镜像 | 外部工具 | docker 沙箱后端（bash 进入容器执行） | 可选；未安装时快速报错并回退 local |
 | 外部命令（git/python/pip 等） | 外部工具 | bash 工具执行 | 由用户环境提供，沙箱 local 后端直跑 |
-| MCP 服务器（可选） | 外部工具 | 用户配置的 stdio/url 服务器 | 失败优雅停用 |
-
 ## 6. 数据模型（Data Model）
 
 ### 6.1 实体、字段、关系、约束
@@ -349,7 +323,7 @@ SessionEnd 钩子，并让每次会话的转录落盘，以便观察和审计智
 
 **PolicyRule**（策略规则）
 - 字段：`pattern`（`tool_name[:arg_regex]`）、`action`（allow/ask/deny）、
-  `source`（builtin/user/skill:<name>）、`order`（表中位置）、
+  `source`（builtin/user/skill）、`order`（表中位置）、
   `ask_count`、`deny_count`（自适应统计）
 - 约束：规则有序，最后匹配生效；技能来源 action 只能是 ask/deny；
   用户来源规则优先于技能来源（同 pattern 时按来源覆盖，不删除技能规则）
@@ -363,7 +337,7 @@ SessionEnd 钩子，并让每次会话的转录落盘，以便观察和审计智
 - 约束：只追加；PreToolUse 修改需在流水线内生效（仅对本次调用）
 
 **MemoryEntry**（长期记忆条目）
-- 字段：`file`（memory/<title>.md）、`title`、`content`、`tags[]`、
+- 字段：`file`（memory/title.md）、`title`、`content`、`tags[]`、
   `created_at`
 - 约束：以段落切分为 chunk 建 TF-IDF 索引；任务收尾整合写入（SessionEnd 后）
 
@@ -389,7 +363,7 @@ SessionEnd 钩子，并让每次会话的转录落盘，以便观察和审计智
 - 约束：连接失败 → 本会话 disabled，其余服务器不受影响；v1 仅 tools 通道
 
 **SandboxConfig**（执行环境配置）
-- 字段：`backend`（local/docker-桩）、`network_enabled`、`timeout`
+- 字段：`backend`（local/docker）、`network_enabled`、`timeout`
 - 约束：`network_enabled` 切换必须经护栏 ask；docker 未安装时快速报错
 
 **HITL 状态机**
@@ -408,8 +382,7 @@ MCP 服务器 1—N 注册表工具。
 ### 7.1 密钥：存储 / 录入 / 更新 / 移除
 
 **存储**（来源优先级从高到低）：
-1. **Windows Credential Manager**（经 `keyring` 库，服务名 `coding-agent-harness`）——
-   首选；操作系统加密，凭据不出本机
+1. **Windows Credential Manager**（经 `keyring` 库，服务名 `coding-agent-harness`）；操作系统加密，凭据不出本机
 2. `DEEPSEEK_API_KEY` 环境变量——通过 `.env` 文件加载（启动时解析，**禁止**
    命令行 `export`，否则进入 shell history）；文档明确说明明文风险
    （.env 为本地明文、任何进程可见环境变量）
@@ -435,22 +408,19 @@ keyring；验证失败提示重输，不落盘）。
 
 **工程问题**：别人如何获取项目并运行起来？如何安全配置自己的 key？
 
-**形态选择（v1）**：**PyPI 包为主，源码分发为辅**。
+**形态选择**：**PyPI 包为主，源码分发为辅**。
 
 - **PyPI**：包名 `coding-agent-harness`；`pip install coding-agent-harness`；
   提供 console script（如 `cah`）作为入口命令；Python 3.11+ 为平台前提
-- **源码**：`git clone` 仓库 + `pip install -e .`（开发/学习形态）
-- **Docker 镜像**：v1 不做——本机无 Docker Desktop，且与"docker 沙箱后端
-  为桩"的现状一致；待 docker 后端落地后再评估 `docker build` + `docker run`
-- **原生二进制**：暂不做——PyInstaller 单文件 exe 可行，但签名与杀软
-  首次运行拦截是额外负担，与"学习项目"定位不符；留待后续章节评估
+- **源码**：`git clone` 仓库 + `pip install -e .`
 
 **README 必须写清**：
 - 获取方式：pip 安装命令 / GitHub 克隆地址
 - 运行命令：`cah`（首次运行自动进密钥向导）
 - key 安全配置步骤：向导隐藏输入 → keyring 存储；或 .env 方式及明文风险
 - 已知限制：Windows 10+、Python 3.11+、需 DeepSeek 账号与网络连通、
-  需 VPN/代理时可配 git 代理、Docker 沙箱暂不可用、MCP 服务器需用户自备
+  需 VPN/代理时可配 git 代理、MCP 服务器需用户自备、docker 沙箱后端
+  需 Docker Desktop（可选，默认 local）
 
 ## 8. 技术选型（Technology Selection）
 
@@ -459,13 +429,9 @@ keyring；验证失败提示重输，不落盘）。
 | 编程语言 | Python 3.11+ | 可读性第一（教学/验证定位）；生态齐备（openai/mcp/keyring）；动态类型减少样板，让循环与流水线"可见" |
 | 框架/库 | `openai` SDK + `requests` + `mcp` + `keyring` | openai SDK 对流式与工具调用支持成熟；mcp/keyring 为官方或事实标准；其余标准库 |
 | LLM 提供商 | DeepSeek（`deepseek-chat`） | OpenAI 兼容协议（切换成本低）、支持工具调用、价格低；base_url 可配 → 未来可换任意兼容端点 |
-| 分发 | PyPI（主）+ GitHub 源码（辅） | pip 安装零平台负担；学习项目不宜先上容器/二进制 |
-| 部署平台 | 无（本地 CLI 工具） | 数据不出本机（除 HTTPS API 调用）；不引入服务器/CI 复杂度 |
+| 分发 | PyPI（主）+ GitHub 源码（辅） | pip 安装零平台负担 |
+| 部署平台 | 无（本地 CLI 工具） | 数据不出本机（除 HTTPS API 调用）；不引入服务器/CI 复杂度；docker 后端为可选沙箱，不影响分发 |
 
-备选排除理由：Rust/Go（性能强但可读性差、生态成本高，违背教学目标）；
-Node/TS（opencode 同栈，但用户选定 Python）；Anthropic 直连（协议非
-OpenAI 兼容，需适配层，v1 不引入）；Docker 分发（本机无 Docker Desktop，
-v1 沙箱桩一致）。
 
 ## 9. 验收标准（Acceptance Standards）
 
@@ -529,22 +495,14 @@ v1 沙箱桩一致）。
   敏感操作（删除/覆盖/网络开启）的"总是允许"是否应二次确认
 - **MCP 恶意服务器**：外部服务器可提供任意工具。对策：MCP 工具同样受护栏
   管辖，用户可对未知服务器工具默认 ask。未决：MCP 工具是否默认 ask 而非 allow
-- **沙箱不足**：local 后端无真隔离，恶意命令可直接作用于宿主机。
-  对策：护栏为第一道防线；docker 后端为升级路线（已桩化）
 
-### 10.2 平台与外部依赖风险
 
-- DeepSeek API 变更/终止 → base_url 可配，可换任意 OpenAI 兼容端点
-- 限流/成本 → 退避重试一次 + token 用量可见
-- Windows 特性：Credential Manager 可用性、路径大小写、符号链接行为
-- 网络连通性（中国网络访问 GitHub/DeepSeek）→ README 写明代理配置方式
-
-### 10.3 未决问题
+### 10.2 未决问题
 
 - embeddings 版 RAG 升级路线（质量 vs 成本）
 - 策略跨会话持久化（记忆库中存"项目级偏好"？）
 - 技能市场/共享（多用户分发技能与收紧规则）
-- 原生二进制分发（PyInstaller + 签名）是否值得
+
 - Docker 沙箱后端落地后的分发形态（容器镜像）
 
 ## 11. 钩子与护栏机制设计（Coding & Mechanism Design）— 重点章节
@@ -557,9 +515,7 @@ v1 沙箱桩一致）。
    白跑）；护栏出错是**不可逆的**——一次未拦住的 `rm -rf`、一次泄露凭据的
    命令，无法撤销。工具在真实文件系统与 shell 上执行，失败模式是静默的
    （文件没了不会有错误返回）
-2. **现有框架此层最不透明**：opencode 的权限系统、Claude Code 的 hooks 都
-   是黑盒，无公开标准、无理论；正因如此，这一层的"验证"价值最高——正契合
-   本项目"验证理论"的目标
+
 3. **它是其他功能的安全前提**：子智能体继承护栏、技能只能收紧、MCP 工具
    走同一条流水线——护栏一旦可信，其余能力才敢放开。强调护栏不是忽略
    子智能体/技能/反馈循环，而是它们都建立在同一安全基座之上
@@ -594,10 +550,13 @@ MCP 工具、技能触发的调用）。护栏是流水线第一环，先于沙�
 
 - 接口：`run(command, timeout) → (stdout, stderr, exit_code)`；暴露
   `network_enabled` 标志
-- **local 后端**（v1 默认）：宿主直接子进程。隔离由护栏承担第一道防线；
+- **local 后端**（默认）：宿主直接子进程。隔离由护栏承担第一道防线；
   文档明确其非隔离性质
-- **docker 后端**（桩）：接口已接好，未安装 Docker 时快速报错；安装后
-  无缝替换，bash 进入容器执行
+- **docker 后端**（真实实现，本机已装 Docker Desktop）：接口已接好，
+  通过 `docker run --rm --network=none -v <workspace>:/workspace` 执行 bash，
+  容器内无法破坏宿主文件系统、默认无网络、读不到宿主凭据；镜像需预装
+  工具链（python/git 等）；未安装 Docker 时快速报错。local 与 docker
+  通过配置切换（默认 local，见 §8）
 - 文件工具不做沙箱——以**路径包含性**（resolve + 前缀检查，防 `..` 与
   符号链接逃逸）作为文件系统边界
 - 网络模式：bash 默认关网络（`network_enabled=false`）；fetch_url 开启；
@@ -699,7 +658,7 @@ class Sandbox:
     def cancel(self, call_id: str) -> None    # 终止在途子进程（interrupt/abort 用）
     network_enabled: bool
 class LocalSandbox(Sandbox): ...      # 宿主子进程
-class DockerSandbox(Sandbox): ...     # 桩：未安装 → 快速报错
+class DockerSandbox(Sandbox): ...     # docker run --rm --network=none -v workspace:/workspace；未安装 → 快速报错
 
 # agent.py —— 工具流水线（核心编排）
 def pipeline(self, call: ToolCall) -> ToolResult:
