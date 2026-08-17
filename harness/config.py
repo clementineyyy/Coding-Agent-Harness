@@ -14,6 +14,7 @@ class Config:
     failure_budget: int = 3
     tool_timeout: int = 30
     memory_top_k: int = 2
+    max_budget_tokens: int = 6000
     compression_keep_turns: int = 10
     compression_max_rounds: int = 3
     workspace: Path = field(default_factory=Path.cwd)

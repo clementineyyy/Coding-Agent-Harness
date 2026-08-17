@@ -63,6 +63,7 @@ class Agent:
         self.memory = memory
         self.config = config
         self.ask_callback = ask_callback
+        self._compress_calls = 0
 
     def context_for_tool(self) -> Context:
         return Context(
@@ -129,18 +130,70 @@ class Agent:
             return "n"
         return answer
 
+    def _check_budget(self, messages: list[dict]) -> bool:
+        total = sum(len(m.get("content", "")) / 4 for m in messages)
+        return total > self.config.max_budget_tokens
+
+    def _compress(self, messages: list[dict]) -> list[dict]:
+        keep = self.config.compression_keep_turns
+        oldest = messages[:-keep]
+        if not oldest:
+            return messages
+        self._compress_calls += 1
+        if self._compress_calls > self.config.compression_max_rounds:
+            return self._drop_oldest(messages, keep)
+        try:
+            summary = self.llm.complete(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "请将以下较早回合总结为简洁摘要，"
+                            "保留关键事实、决定与结果："
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(oldest, ensure_ascii=False),
+                    },
+                ],
+                tools=[],
+            )
+        except Exception:
+            return self._drop_oldest(messages, keep)
+        text = (summary.text or "").strip()
+        if not text:
+            return self._drop_oldest(messages, keep)
+        return [{"role": "system", "content": f"[summary] {text}"}] + messages[-keep:]
+
+    def _drop_oldest(self, messages: list[dict], keep: int) -> list[dict]:
+        window = messages[-keep:]
+        if window and window[0]["role"] not in ("user", "system"):
+            for m in reversed(messages[:-keep]):
+                if m["role"] in ("user", "system"):
+                    return [m] + window
+        return window
+
     def run(self, task: str) -> AgentResult:
         result = AgentResult()
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": task},
         ]
+        if self.memory is not None:
+            for chunk in self.memory.top_k_chunks(task):
+                messages.append(
+                    {"role": "system", "content": f"[memory] {chunk['chunk']}"}
+                )
         call_uid = 0
         fail_seq = 0
         fail_tool: str | None = None
         max_fail_seq = 0
+        self._compress_calls = 0
         self.state.fire("task_submitted", "loop")
         while result.steps_used < self.config.max_steps:
+            if self._check_budget(messages):
+                messages = self._compress(messages)
             response = self.llm.complete(messages, build_request_tools(self.registry))
             result.steps_used += 1
             if not response.tool_calls:
@@ -148,6 +201,7 @@ class Agent:
                 messages.append({"role": "assistant", "content": final})
                 result.text = final
                 result.messages = messages
+                self.messages = messages
                 result.failed_sequence = max_fail_seq
                 self.state.fire("final_answer", "loop")
                 return result
@@ -196,6 +250,7 @@ class Agent:
                         messages.append({"role": "assistant", "content": final})
                         result.text = final
                         result.messages = messages
+                        self.messages = messages
                         result.failed_sequence = max_fail_seq
                         self.state.fire("final_answer", "loop")
                         return result
@@ -206,6 +261,7 @@ class Agent:
         messages.append({"role": "assistant", "content": final})
         result.text = final
         result.messages = messages
+        self.messages = messages
         result.failed_sequence = max_fail_seq
         self.state.fire("final_answer", "loop")
         return result
