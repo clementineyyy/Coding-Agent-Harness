@@ -80,3 +80,20 @@ def test_ask_guardrail_callback_answer_allows_and_continues(tmp_path):
     assert answers and "echo" in answers[0][0]
     assert any(t.status == "success" for t in r.tool_results)
     assert "done" in r.text
+
+
+def test_ask_deny_then_final_answer_does_not_crash(tmp_path):
+    sb = LocalSandbox()
+    cfg = Config(workspace=tmp_path, tool_timeout=5)
+    reg = make_registry([bash_spec()])
+    pol = Policy(user_rules=[Rule("bash:echo.*", "ask", "user")])
+    llm = FakeLLM([FakeTurn(tool_calls=[{"name": "bash", "arguments": {"command": "echo hi"}}]),
+                   FakeTurn(text="done")])
+    st = StateMachine()
+    a = Agent(llm, reg, sb, HookBus(), pol, st, None, cfg,
+              ask_callback=lambda question, options: "n")
+    r = a.run("t")
+    assert any("denied" in str(t) for t in r.tool_results)
+    assert r.text == "done"
+    assert st.state == "completed"
+    assert st.event_history[-1]["event"] == "final_answer"

@@ -87,6 +87,8 @@ class Agent:
             self.state.fire("approval_needed", "guardrail")
             answer = self._ask(verdict.matched_rule, verdict.reason)
             self.policy.apply_answer(verdict.matched_rule, answer)
+            if self.state.state == "awaiting_user":
+                self.state.fire("user_answered", "user")
             if answer in ("n", "never_allow"):
                 return ToolResult(status="error", error=f"guardrail denied: {verdict.reason}")
         if self.state.state == "awaiting_user":
