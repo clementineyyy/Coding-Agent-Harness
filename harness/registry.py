@@ -32,6 +32,17 @@ class Tool:
     requires_approval: bool = False
     needs_sandbox: bool = False
     uses_workspace: bool = False
+    handler: Callable | None = None
+
+
+@dataclass
+class ToolResult:
+    status: str
+    output: str = ""
+    error: str | None = None
+    exit_code: int | None = None
+    duration_ms: int = 0
+    truncated: bool = False
 
 
 @dataclass
@@ -51,9 +62,11 @@ class Context:
 def make_registry(specs: list[Tool]) -> dict[str, Tool]:
     registry: dict[str, Tool] = {}
     for spec in specs:
-        if spec.name in registry:
-            raise ValueError(f"duplicate tool name: {spec.name}")
-        registry[spec.name] = spec
+        subs = spec if isinstance(spec, (list, tuple)) else (spec,)
+        for s in subs:
+            if s.name in registry:
+                raise ValueError(f"duplicate tool name: {s.name}")
+            registry[s.name] = s
     return registry
 
 
