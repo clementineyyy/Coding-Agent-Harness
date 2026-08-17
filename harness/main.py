@@ -10,7 +10,7 @@ from harness.agent import Agent
 from harness.config import Config
 from harness.credentials import CredentialStore, wizard_enter_key
 from harness.hooks import HookBus
-from harness.llm import OpenAILLM
+from harness.llm import LLMError, OpenAILLM
 from harness.memory import MemoryStore
 from harness.mcp import load_mcp_servers
 from harness.policy import Policy
@@ -200,7 +200,7 @@ def _dispatch_command(agent, store, config, line) -> tuple[int | None, Agent | N
         if rest.startswith("drop skill:"):
             name = rest[len("drop skill:"):].strip()
             if agent is None:
-                print("未配置 API Key，无法操作策略")
+                print("会话不可用（Agent 未初始化），无法操作策略")
             else:
                 removed = _drop_skill(agent, name)
                 if removed:
@@ -208,7 +208,7 @@ def _dispatch_command(agent, store, config, line) -> tuple[int | None, Agent | N
                 else:
                     print(f"未找到技能 {name} 的规则")
         elif agent is None:
-            print("未配置 API Key，无法显示策略")
+            print("会话不可用（Agent 未初始化），无法显示策略")
         else:
             for rule in agent.policy.rules:
                 print(f"{rule.pattern} -> {rule.action} ({rule.source})")
@@ -262,7 +262,7 @@ def _handle_key(agent, store, config, sub: str) -> tuple[int | None, Agent | Non
 
 def _run_task(agent, task: str, allow_resume: bool = True) -> None:
     if agent is None:
-        print("未配置 API Key，无法执行任务。请使用 /key set 设置。")
+        print("会话不可用（Agent 未初始化，通常因未配置 API Key）。请用 /key set 设置后重试。")
         return
     if agent.on_text is None:
         agent.on_text = lambda text: print(text)
@@ -275,6 +275,14 @@ def _run_task(agent, task: str, allow_resume: bool = True) -> None:
     except KeyboardInterrupt:
         interrupted = True
         print()
+    except LLMError as exc:
+        print(f"API 调用失败: {exc}（会话保持存活，可继续操作）")
+        _settle_state(agent)
+        return
+    except Exception as exc:
+        print(f"任务执行失败: {type(exc).__name__}: {exc}（会话保持存活，可继续操作）")
+        _settle_state(agent)
+        return
     finally:
         agent.llm = counter.llm
     if interrupted:
@@ -287,6 +295,18 @@ def _run_task(agent, task: str, allow_resume: bool = True) -> None:
         else:
             print(f"⊘ {call['name']}: {tres.error or tres.output}")
     print(f"[step {result.steps_used}/{agent.config.max_steps} | ~{counter.tokens} tok]")
+
+
+def _settle_state(agent) -> None:
+    """失败收尾：把状态机带回 completed，使下一次任务仍可提交（会话存活）。"""
+    if agent.state.state not in ("running", "executing"):
+        return
+    try:
+        if agent.state.state == "executing":
+            agent.state.fire("error", "loop")
+        agent.state.fire("final_answer", "loop")
+    except StateError:
+        pass
 
 
 def _handle_interrupt(agent, task: str, allow_resume: bool) -> None:

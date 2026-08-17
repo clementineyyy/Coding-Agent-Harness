@@ -24,7 +24,7 @@ def make_fake_store(monkeypatch, key=None):
     return store
 
 
-def build_agent(tmp_path, turns=None, policy=None, hooks=None):
+def build_agent(tmp_path, turns=None, policy=None, hooks=None, llm=None):
     from harness.agent import Agent
     from harness.fake_llm import FakeLLM, FakeTurn
     from harness.hooks import HookBus
@@ -35,7 +35,8 @@ def build_agent(tmp_path, turns=None, policy=None, hooks=None):
     from harness.tools.bash import spec as bash_spec
 
     cfg = Config(workspace=tmp_path, tool_timeout=5)
-    llm = FakeLLM(turns if turns is not None else [FakeTurn(text="ok")])
+    if llm is None:
+        llm = FakeLLM(turns if turns is not None else [FakeTurn(text="ok")])
     return Agent(
         llm,
         make_registry([bash_spec()]),
@@ -264,3 +265,56 @@ def test_run_repl_interrupt_menu_resume_reruns_task(tmp_path, monkeypatch, capsy
     assert run_repl(Config(workspace=tmp_path, tool_timeout=5)) == 0
     out = capsys.readouterr().out
     assert "搞定了" in out and calls["n"] == 2
+
+
+def test_run_repl_survives_llm_errors(tmp_path, monkeypatch, capsys):
+    from harness.llm import LLMAuthError
+
+    make_fake_store(monkeypatch, key="DUMMY-KEY")
+
+    class BoomLLM:
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, messages, tools):
+            self.calls += 1
+            raise LLMAuthError("invalid api key")
+
+    boom = BoomLLM()
+    agent = build_agent(tmp_path, llm=boom)
+    monkeypatch.setattr("harness.main.make_agent", lambda cfg: agent)
+    feed_inputs(monkeypatch, ["task1", "task2", "/exit"])
+    assert run_repl(Config(workspace=tmp_path, tool_timeout=5)) == 0
+    out = capsys.readouterr().out
+    assert "API 调用失败" in out and "invalid api key" in out
+    assert boom.calls == 2 and "任务: task2" in out
+
+
+def test_run_repl_interrupt_in_running_state_resume(tmp_path, monkeypatch, capsys):
+    from harness.fake_llm import FakeLLM, FakeTurn
+
+    make_fake_store(monkeypatch, key="DUMMY-KEY")
+    agent = build_agent(
+        tmp_path,
+        turns=[
+            FakeTurn(tool_calls=[{"name": "bash", "arguments": {"command": "echo hi"}}]),
+            FakeTurn(text="搞定了"),
+        ],
+    )
+    real_run = agent.run
+    calls = {"n": 0}
+
+    def flaky(task):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            agent.state.fire("task_submitted", "loop")
+            raise KeyboardInterrupt()
+        return real_run(task)
+
+    agent.run = flaky
+    monkeypatch.setattr("harness.main.make_agent", lambda cfg: agent)
+    feed_inputs(monkeypatch, ["t1", "1", "/exit"])
+    assert run_repl(Config(workspace=tmp_path, tool_timeout=5)) == 0
+    out = capsys.readouterr().out
+    assert "搞定了" in out and calls["n"] == 2
+    assert agent.state.state == "completed"
