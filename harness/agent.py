@@ -55,6 +55,7 @@ class Agent:
         memory: MemoryStore | None,
         config: Config,
         ask_callback: Callable | None = None,
+        on_text: Callable[[str], None] | None = None,
     ):
         self.llm = llm
         self.registry = registry
@@ -65,6 +66,7 @@ class Agent:
         self.memory = memory
         self.config = config
         self.ask_callback = ask_callback
+        self.on_text = on_text
         self._compress_calls = 0
         self.warnings: list[str] = []
         self._tool_calls: list[dict] = []
@@ -121,6 +123,10 @@ class Agent:
         self.state.fire("tool_finished", "loop")
         self.hooks.post_tool_use(name, args, result)
         return result
+
+    def _emit_text(self, text: str) -> None:
+        if text and self.on_text is not None:
+            self.on_text(text)
 
     def _ask(self, rule, reason: str) -> str:
         question = f"是否允许执行该操作？\n规则: {rule.pattern}\n原因: {reason}"
@@ -203,9 +209,11 @@ class Agent:
             result.steps_used += 1
             if not response.tool_calls:
                 final = response.text or "任务完成"
+                self._emit_text(final)
                 messages.append({"role": "assistant", "content": final})
                 result.text = final
                 return self._finish(result, messages, max_fail_seq)
+            self._emit_text(response.text)
             assistant_call = []
             for i, call in enumerate(response.tool_calls):
                 assistant_call.append({
@@ -249,6 +257,7 @@ class Agent:
                             f"连续失败 {fail_seq} 次（工具 {fail_tool}），"
                             f"超过失败预算 {self.config.failure_budget}，停止重试。"
                         )
+                        self._emit_text(final)
                         messages.append({"role": "assistant", "content": final})
                         result.text = final
                         return self._finish(result, messages, max_fail_seq)
@@ -256,6 +265,7 @@ class Agent:
                     fail_seq = 0
                     fail_tool = None
         final = f"达到步数上限 {self.config.max_steps}，任务终止，未挂死。"
+        self._emit_text(final)
         messages.append({"role": "assistant", "content": final})
         result.text = final
         return self._finish(result, messages, max_fail_seq)
