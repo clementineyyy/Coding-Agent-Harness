@@ -16,11 +16,13 @@ class Policy:
         return default_rules() + self._skill_rules + self._user_rules
 
     def apply_answer(self, rule: Rule, answer: str) -> None:
+        if answer not in ("y", "n", "always_allow", "never_allow"):
+            raise ValueError(f"unknown answer: {answer}")
         stored = next((r for r in self._user_rules
                        if r.pattern == rule.pattern and r.source == rule.source), None)
         if answer == "always_allow":
             if stored is None:
-                self._user_rules.append(Rule(rule.pattern, "allow", rule.source))
+                self._user_rules.append(Rule(rule.pattern, "allow", "user"))
                 self._changes.append({
                     "rule_pattern": rule.pattern,
                     "old_action": None,
@@ -41,7 +43,7 @@ class Policy:
             return
         if answer == "never_allow":
             if stored is None:
-                self._user_rules.append(Rule(rule.pattern, "deny", rule.source))
+                self._user_rules.append(Rule(rule.pattern, "deny", "user"))
                 self._changes.append({
                     "rule_pattern": rule.pattern,
                     "old_action": None,
@@ -62,8 +64,9 @@ class Policy:
             return
         if stored is None:
             return
-        count = self._counts.get(rule.pattern, 0) + 1
-        self._counts[rule.pattern] = count
+        key = f"{rule.pattern}:{answer}"
+        count = self._counts.get(key, 0) + 1
+        self._counts[key] = count
         if answer == "n" and count >= 2 and stored.action != "deny":
             old = stored.action
             stored.action = "deny"

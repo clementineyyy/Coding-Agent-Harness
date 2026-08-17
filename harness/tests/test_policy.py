@@ -1,3 +1,4 @@
+import pytest
 from harness.guardrails import Rule
 from harness.policy import Policy
 
@@ -34,3 +35,30 @@ def test_changes_recorded():
     p = Policy(user_rules=[Rule("bash:x", "ask", "user")])
     p.apply_answer(Rule("bash:x", "ask", "user"), "always_allow")
     assert p.changes()[-1]["new_action"] == "allow"
+
+def test_y_after_double_deny_does_not_downgrade():
+    p = Policy(user_rules=[Rule("bash:chmod.*", "ask", "user")])
+    p.apply_answer(Rule("bash:chmod.*", "ask", "user"), "n")
+    p.apply_answer(Rule("bash:chmod.*", "ask", "user"), "n")
+    p.apply_answer(Rule("bash:chmod.*", "ask", "user"), "y")
+    r = next(r for r in p.rules if r.pattern == "bash:chmod.*" and r.source == "user")
+    assert r.action == "deny"
+
+def test_n_after_two_y_does_not_deny():
+    p = Policy(user_rules=[Rule("bash:chmod.*", "ask", "user")])
+    p.apply_answer(Rule("bash:chmod.*", "ask", "user"), "y")
+    p.apply_answer(Rule("bash:chmod.*", "ask", "user"), "y")
+    p.apply_answer(Rule("bash:chmod.*", "ask", "user"), "n")
+    r = next(r for r in p.rules if r.pattern == "bash:chmod.*" and r.source == "user")
+    assert r.action == "ask"
+
+def test_always_allow_on_non_user_rule_adds_user_sourced_rule():
+    p = Policy()
+    p.apply_answer(Rule("bash:rm -rf.*", "ask", "builtin"), "always_allow")
+    added = next(r for r in p.rules if r.pattern == "bash:rm -rf.*" and r.action == "allow")
+    assert added.source == "user"
+
+def test_unknown_answer_raises():
+    p = Policy(user_rules=[Rule("bash:x", "ask", "user")])
+    with pytest.raises(ValueError):
+        p.apply_answer(Rule("bash:x", "ask", "user"), "maybe")
