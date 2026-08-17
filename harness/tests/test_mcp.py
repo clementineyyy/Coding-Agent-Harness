@@ -1,5 +1,8 @@
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 from harness.config import Config
 from harness.mcp import MCPServer, load_mcp_servers
@@ -7,6 +10,21 @@ from harness.registry import make_registry
 from harness.sandbox import LocalSandbox
 
 FAKE = Path(__file__).parent / "fixtures" / "fake_mcp_server.py"
+
+SILENT_CALL_SCRIPT = (
+    "import json, sys\n"
+    "for line in sys.stdin:\n"
+    "    req = json.loads(line)\n"
+    "    m = req.get('method')\n"
+    "    if m == 'initialize':\n"
+    "        print(json.dumps({'jsonrpc': '2.0', 'id': req.get('id'), 'result': "
+    "{'protocolVersion': '2024-11-05', 'capabilities': {}, 'serverInfo': "
+    "{'name': 'silent', 'version': '1'}}}), flush=True)\n"
+    "    elif m == 'tools/list':\n"
+    "        print(json.dumps({'jsonrpc': '2.0', 'id': req.get('id'), 'result': "
+    "{'tools': [{'name': 'echo_tool', 'description': 'd', 'inputSchema': "
+    "{'type': 'object', 'properties': {'text': {'type': 'string'}}}}]}}), flush=True)\n"
+)
 
 
 def stdio_cfg(name="demo"):
@@ -91,3 +109,28 @@ def test_url_transport_http_error_connect_fails(monkeypatch):
                         lambda url, json=None, timeout=None: FakeResp())
     srv = MCPServer("badsrv", {"type": "url", "url": "http://127.0.0.1:1/mcp"})
     assert not srv.connect()
+
+
+def test_init_timeout_disables_server(tmp_path):
+    srv = MCPServer("silent-init", {"type": "stdio", "command": sys.executable,
+                                    "args": ["-c", "import time; time.sleep(3600)"]},
+                    init_timeout=0.3)
+    start = time.monotonic()
+    assert not srv.connect()
+    assert time.monotonic() - start < 3.0
+    srv.close()
+
+
+def test_call_timeout_kills_proc_and_does_not_wedge(tmp_path):
+    srv = MCPServer("silent-call", {"type": "stdio", "command": sys.executable,
+                                    "args": ["-c", SILENT_CALL_SCRIPT]},
+                    init_timeout=2.0, rpc_timeout=0.5)
+    assert srv.connect()
+    assert any(t["name"] == "echo_tool" for t in srv.list_tools())
+    with pytest.raises(TimeoutError):
+        srv.call("echo_tool", {"text": "x"})
+    start = time.monotonic()
+    with pytest.raises(RuntimeError):
+        srv.call("echo_tool", {"text": "y"})
+    assert time.monotonic() - start < 5.0
+    srv.close()

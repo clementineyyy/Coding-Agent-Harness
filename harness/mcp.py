@@ -25,21 +25,29 @@ RPC_TIMEOUT = 30.0
 
 
 class MCPServer:
-    def __init__(self, name: str, cfg: dict):
+    def __init__(
+        self,
+        name: str,
+        cfg: dict,
+        init_timeout: float = INIT_TIMEOUT,
+        rpc_timeout: float = RPC_TIMEOUT,
+    ):
         self.name = name
         self.cfg = cfg
         self.tools: list[dict] = []
         self._proc: subprocess.Popen | None = None
         self._connected = False
         self._seq = 0
+        self._init_timeout = init_timeout
+        self._rpc_timeout = rpc_timeout
 
     def connect(self) -> bool:
         try:
             if self.cfg.get("type") == "url":
-                self._rpc("initialize", _client_info(), INIT_TIMEOUT)
+                self._rpc("initialize", _client_info(), self._init_timeout)
             else:
                 self._spawn_stdio()
-                self._rpc("initialize", _client_info(), INIT_TIMEOUT)
+                self._rpc("initialize", _client_info(), self._init_timeout)
             self._connected = True
             return True
         except Exception as exc:
@@ -48,13 +56,13 @@ class MCPServer:
             return False
 
     def list_tools(self) -> list[dict]:
-        result = self._rpc("tools/list", {}, RPC_TIMEOUT)
+        result = self._rpc("tools/list", {}, self._rpc_timeout)
         tools = result.get("tools", [])
         self.tools = tools
         return tools
 
     def call(self, name: str, args: dict) -> dict:
-        return self._rpc("tools/call", {"name": name, "arguments": args}, RPC_TIMEOUT)
+        return self._rpc("tools/call", {"name": name, "arguments": args}, self._rpc_timeout)
 
     def close(self) -> None:
         proc, self._proc = self._proc, None
@@ -109,8 +117,32 @@ class MCPServer:
         self._seq += 1
         proc.stdin.write(json.dumps(_request(self._seq, method, params), ensure_ascii=False) + "\n")
         proc.stdin.flush()
-        line = _read_line(proc, self.name, timeout)
+        try:
+            line = _read_line(proc, self.name, timeout)
+        except TimeoutError:
+            self._teardown(proc)
+            raise
         return _unwrap(json.loads(line))
+
+    def _teardown(self, proc: subprocess.Popen) -> None:
+        """读超时后终止子进程并标记未连接。
+
+        不这样做时，被阻塞在 readline 的 reader 线程会一直持有管道读锁，
+        使该服务器后续所有调用都永久卡死并泄漏线程。
+        """
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=1)
+        except Exception:
+            pass
+        self._connected = False
 
 
 def load_mcp_servers(server_cfgs: list[dict], registry: dict, sandbox, config) -> list[str]:
