@@ -57,6 +57,7 @@ class Context:
     ask_callback: Callable | None = None
     agent_factory: Callable | None = None
     llm: LLM | None = None
+    registry: dict[str, Tool] | None = None
 
 
 def make_registry(specs: list[Tool]) -> dict[str, Tool]:
