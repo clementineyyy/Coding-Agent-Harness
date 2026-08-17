@@ -48,19 +48,19 @@ class CredentialStore:
 
     def set(self, key: str) -> None:
         if self._keyring is None:
-            return
+            raise RuntimeError("keyring 不可用（无凭据服务），无法保存 API Key")
         try:
             self._keyring.set_password(self.service, "api_key", key)
         except Exception:
-            pass
+            raise RuntimeError("keyring 写入失败，无法保存 API Key") from None
 
     def clear(self) -> None:
         if self._keyring is None:
-            return
+            raise RuntimeError("keyring 不可用（无凭据服务），无法删除 API Key")
         try:
             self._keyring.delete_password(self.service, "api_key")
         except Exception:
-            pass
+            raise RuntimeError("keyring 删除失败，无法删除 API Key") from None
 
     def verified_at(self) -> str | None:
         return self._keyring_get("verified_at")
@@ -81,6 +81,6 @@ class CredentialStore:
 
 def wizard_enter_key() -> str:
     key = getpass.getpass("请粘贴 API Key（输入不可见）: ")
-    if not key:
+    if not key.strip():
         raise ValueError("API Key 不能为空")
     return key
