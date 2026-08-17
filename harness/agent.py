@@ -38,6 +38,7 @@ class AgentResult:
     tool_results: list[dict] = field(default_factory=list)
     policy_changes: list[dict] = field(default_factory=list)
     messages: list[dict] = field(default_factory=list)
+    failed_sequence: int = 0
 
 
 class Agent:
@@ -135,6 +136,9 @@ class Agent:
             {"role": "user", "content": task},
         ]
         call_uid = 0
+        fail_seq = 0
+        fail_tool: str | None = None
+        max_fail_seq = 0
         self.state.fire("task_submitted", "loop")
         while result.steps_used < self.config.max_steps:
             response = self.llm.complete(messages, build_request_tools(self.registry))
@@ -144,6 +148,7 @@ class Agent:
                 messages.append({"role": "assistant", "content": final})
                 result.text = final
                 result.messages = messages
+                result.failed_sequence = max_fail_seq
                 self.state.fire("final_answer", "loop")
                 return result
             assistant_call = []
@@ -174,10 +179,34 @@ class Agent:
                         self._result_to_dict(tool_result), ensure_ascii=False
                     ),
                 })
+                norm = self._result_to_dict(tool_result)
+                failed = norm.get("status") != "success" or bool(norm.get("error"))
+                if failed:
+                    if call["name"] == fail_tool:
+                        fail_seq += 1
+                    else:
+                        fail_seq = 1
+                        fail_tool = call["name"]
+                    max_fail_seq = max(max_fail_seq, fail_seq)
+                    if fail_seq >= self.config.failure_budget:
+                        final = (
+                            f"连续失败 {fail_seq} 次（工具 {fail_tool}），"
+                            f"超过失败预算 {self.config.failure_budget}，停止重试。"
+                        )
+                        messages.append({"role": "assistant", "content": final})
+                        result.text = final
+                        result.messages = messages
+                        result.failed_sequence = max_fail_seq
+                        self.state.fire("final_answer", "loop")
+                        return result
+                else:
+                    fail_seq = 0
+                    fail_tool = None
         final = f"达到步数上限 {self.config.max_steps}，任务终止，未挂死。"
         messages.append({"role": "assistant", "content": final})
         result.text = final
         result.messages = messages
+        result.failed_sequence = max_fail_seq
         self.state.fire("final_answer", "loop")
         return result
 
@@ -188,6 +217,7 @@ class Agent:
                 "status": tool_result.status,
                 "output": tool_result.output,
                 "error": tool_result.error,
+                "exit_code": tool_result.exit_code,
             }
         if isinstance(tool_result, dict):
             return tool_result
