@@ -110,3 +110,10 @@ def test_mark_verified_records_timestamp(tmp_path):
     cs.mark_verified()
     assert cs.status()["verified_at"] is not None
     assert cs.status()["source"] == "keyring"
+
+
+def test_env_value_tolerates_bom(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("\ufeffDEEPSEEK_API_KEY=sk-bom\n", encoding="utf-8")
+    cs = CredentialStore(env_file=str(env), keyring_backend=FakeKeyring())
+    assert cs.get() == "sk-bom"

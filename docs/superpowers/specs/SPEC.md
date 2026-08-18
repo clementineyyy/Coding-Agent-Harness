@@ -70,12 +70,12 @@ Ctrl+C 干净退出并触发 SessionEnd。
 ### 3.1 纯 LLM（模型交互）
 
 - **输入**：消息列表（系统提示词 + 历史）、`tools=` 模式（来自工具注册表）、
-  模型配置（base_url、model、凭据来源，见 §4.2 / §7.1）
+  模型配置（base_url、model、凭据来源；平台适配见 §4.2 / §7.1）
 - **行为**：调用 DeepSeek chat completions（`stream=True`），将流式文本实时
   转发到终端；解析回合中的 `tool_calls`；每回合统计 token 用量
 - **输出**：流式文本 + 可选的 `tool_calls`（交由 3.2 执行）；无工具调用时
   即为最终答案，任务进入收尾（见 3.6）
-- **边界条件**：模型固定 `deepseek-chat`；上下文预算检查（超出先压缩，
+- **边界条件**：模型默认 `deepseek-chat`（可配置，见 §4.2）；上下文预算检查（超出先压缩，
   见 3.3）；步数上限（默认 50）终止失控循环
 - **错误处理**：API 错误（密钥错误、限流、网络）→ 明确提示，会话存活；
   限流退避重试一次；连续失败则中止本轮任务并报告
@@ -195,7 +195,12 @@ Ctrl+C 干净退出并触发 SessionEnd。
 - **首次运行引导**：首次运行引导用户安全录入 key（隐藏输入，`getpass`），
   并支持查看 / 更新 / 清除；查看时只回显状态（是否已配置、来源、最近验证
   时间），绝不回显明文
-- **网络**：仅通过 HTTPS 调用 DeepSeek API；不使用明文中转
+- **平台适配**：任意 OpenAI 兼容平台，**无需改源码**。配置优先级：
+  TOML 配置文件（`cah --config config.toml`）> 环境变量 / `.env` 文件
+  （`DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL`）> 默认值
+  （`https://api.deepseek.com` / `deepseek-chat`）；默认值适配 DeepSeek
+  官方，其余平台（如硅基流动）仅需覆盖 base_url 与 model（§7.1 同）
+- **网络**：仅通过 HTTPS 调用 LLM API；不使用明文中转
 
 ### 4.3 可行性
 

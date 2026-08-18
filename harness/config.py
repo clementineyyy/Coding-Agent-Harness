@@ -1,9 +1,30 @@
 from __future__ import annotations
 
+import os
 import tomllib
 import warnings
 from dataclasses import dataclass, field, fields
 from pathlib import Path
+
+_ENV_BASE_URL = "DEEPSEEK_BASE_URL"
+_ENV_MODEL = "DEEPSEEK_MODEL"
+
+
+def _read_env_file(path: str) -> dict[str, str]:
+    values = {}
+    p = Path(path)
+    if not p.exists():
+        return values
+    try:
+        for line in p.read_text(encoding="utf-8-sig").splitlines():
+            line = line.strip()
+            if line and "=" in line and not line.startswith("#"):
+                key, _, value = line.partition("=")
+                if key.strip():
+                    values[key.strip()] = value.strip()
+    except Exception:
+        return values
+    return values
 
 
 @dataclass
@@ -22,8 +43,14 @@ class Config:
     mcp_servers: list[dict] = field(default_factory=list)
 
     @classmethod
-    def load(cls, path: Path | None = None) -> Config:
+    def load(cls, path: Path | None = None, env_file: str = ".env") -> Config:
         cfg = cls()
+        env = _read_env_file(env_file)
+        env.update({k: v for k, v in os.environ.items() if k in (_ENV_BASE_URL, _ENV_MODEL) and v})
+        if env.get(_ENV_BASE_URL):
+            cfg.base_url = env[_ENV_BASE_URL].rstrip("/")
+        if env.get(_ENV_MODEL):
+            cfg.model = env[_ENV_MODEL]
         if path is None:
             return cfg
         path = Path(path)

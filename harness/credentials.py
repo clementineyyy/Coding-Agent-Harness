@@ -49,7 +49,7 @@ class CredentialStore:
         try:
             if not self.env_file.exists():
                 return None
-            for line in self.env_file.read_text(encoding="utf-8").splitlines():
+            for line in self.env_file.read_text(encoding="utf-8-sig").splitlines():
                 line = line.strip()
                 if line.startswith(_ENV_KEY + "="):
                     value = line[len(_ENV_KEY) + 1:].strip()

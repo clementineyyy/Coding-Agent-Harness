@@ -140,7 +140,7 @@ Coding-Agent-Harness/
 ## 配置（harness/config.py）
 
 `Config` dataclass 定义全部配置字段（`Config.load(path)` 支持 TOML
-配置文件加载；REPL 启动时使用默认值）：
+配置文件加载）：
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
@@ -156,6 +156,30 @@ Coding-Agent-Harness/
 | `max_output_bytes` | `51200` | 工具输出截断上限 |
 | `workspace` | 当前目录 | 工作区（文件/记忆/技能/转录根） |
 | `mcp_servers` | `[]` | MCP 服务器列表（§5.3） |
+
+**配置优先级**：TOML 配置文件（`cah --config config.toml`）> 环境变量 /
+`.env` 文件 > 默认值。
+
+**适配任意 OpenAI 兼容平台**（无需改源码）：key 之外，只需覆盖
+`base_url` 与 `model`。在项目根目录 `.env`（或环境变量）中配置：
+
+| 平台 | `.env` 内容 |
+|---|---|
+| DeepSeek 官方 | `DEEPSEEK_API_KEY=sk-...`（默认 base_url/model 即可） |
+| 硅基流动 | 再加 `DEEPSEEK_BASE_URL=https://api.siliconflow.cn/v1`、`DEEPSEEK_MODEL=deepseek-ai/DeepSeek-V3` |
+| 其他 OpenAI 兼容平台 | 再加对应平台的 `base_url` / `model` |
+
+或用 TOML 文件（环境变量同样支持）：
+
+```toml
+# config.toml
+model = "deepseek-ai/DeepSeek-V3"
+base_url = "https://api.siliconflow.cn/v1"
+```
+
+```bash
+cah --config config.toml
+```
 
 ## REPL 命令表
 

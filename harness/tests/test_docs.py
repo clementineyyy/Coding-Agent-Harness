@@ -47,6 +47,12 @@ def test_gitlab_ci_has_unit_test_job():
     assert "pytest harness/tests" in gitlab
 
 
+def test_readme_documents_env_config_override():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "DEEPSEEK_BASE_URL" in readme, "README 未文档化 DEEPSEEK_BASE_URL"
+    assert "DEEPSEEK_MODEL" in readme, "README 未文档化 DEEPSEEK_MODEL"
+
+
 def test_console_script_cah_declared():
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")

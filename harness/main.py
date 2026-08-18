@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Any, Callable
@@ -419,8 +420,14 @@ def _transcript_dir(config) -> Path:
     return path
 
 
-def main() -> int:
-    return run_repl(Config())
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="cah", description="Coding Agent Harness REPL")
+    parser.add_argument(
+        "--config", "-c", type=Path, default=None,
+        help="TOML 配置文件路径（优先级最高）；未指定时读取环境变量 / .env 覆盖（DEEPSEEK_BASE_URL / DEEPSEEK_MODEL）",
+    )
+    args = parser.parse_args(argv)
+    return run_repl(Config.load(args.config))
 
 
 if __name__ == "__main__":

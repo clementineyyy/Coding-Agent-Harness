@@ -365,3 +365,19 @@ def test_key_clear_env_source_hints_manual_removal(tmp_path, monkeypatch, capsys
     out = capsys.readouterr().out
     assert "手动从 .env 中删除" in out
     assert state["key"] == "sk-env"
+
+
+def test_main_parses_config_arg(monkeypatch, tmp_path):
+    from harness.main import main
+
+    p = tmp_path / "config.toml"
+    p.write_text('model = "deepseek-reasoner"\n', encoding="utf-8")
+    captured = {}
+
+    def fake_run(cfg):
+        captured["cfg"] = cfg
+        return 0
+
+    monkeypatch.setattr("harness.main.run_repl", fake_run)
+    assert main(["--config", str(p)]) == 0
+    assert captured["cfg"].model == "deepseek-reasoner"
