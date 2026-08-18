@@ -1,14 +1,54 @@
 # Coding Agent Harness
 
-一个真实的编码智能体框架（Python 3.11+，Windows/Linux）
+一个真实的编码智能体框架（Python 3.11+，Windows/Linux）：以 REPL 交互为核心，
+内置治理护栏（deny/ask 审批）、自适应策略、TF-IDF 记忆、上下文预算与压缩、
+HITL 状态机与工具执行沙箱；全量测试离线、确定性可复现（FakeLLM +
+MockTransport），已发布至 PyPI。
 
 设计规格见 `docs/superpowers/specs/SPEC.md`（下文以 `§x.y` 引用章节号）。
+
 ## 组件图（SPEC §5.1）
 
 ![组件图](docs/superpowers/specs/assets/Gemini_Generated_Image_y9hi41y9hi41y9hi.jpg)
 
 职责划分：Agent 只负责循环与状态；工具流水线只负责"一次调用"的判定-执行；
 护栏/策略/钩子/沙箱各自单一职责；状态机是交互主轴。完整数据流见 SPEC §5.2。
+
+## 目录结构
+
+```
+Coding-Agent-Harness/
+├── harness/                    # 核心包（运行时）
+│   ├── main.py                 # REPL 入口（console script `cah`）
+│   ├── agent.py                # 任务循环：记忆检索 → 迭代 → 收尾整合
+│   ├── llm.py                  # OpenAI 兼容客户端（流式 / tool_calls）
+│   ├── credentials.py          # 凭据：keyring → .env → 向导
+│   ├── config.py               # Config 配置（支持 TOML 加载）
+│   ├── guardrails.py           # 护栏：内置 deny 清单 + 判定
+│   ├── policy.py               # 自适应策略（ask 升降级、/rules）
+│   ├── state.py                # 状态机（HITL 交互主轴）
+│   ├── hooks.py / transcript.py# 钩子总线 / SessionEnd 转录
+│   ├── memory.py               # TF-IDF 记忆存储与检索
+│   ├── registry.py             # 工具注册表（内置 + MCP）
+│   ├── sandbox.py              # LocalSandbox / DockerSandbox
+│   ├── mcp.py                  # MCP 客户端（stdio / url）
+│   ├── fake_llm.py             # 离线测试用 FakeLLM
+│   └── tools/                  # 内置工具：bash / files / search / web /
+│                               #   notes / memory / skills / subagent / ask
+├── harness/tests/              # 全部测试（离线、确定性）
+│   ├── test_*.py               # 组件单测 + 验收矩阵（§9）+ 安全扫描
+│   ├── fixtures/               # 假 MCP 服务器、技能夹具
+│   └── mechanism_demo/         # 机制演示脚本（demo ①②③，make demo）
+├── scripts/                    # 辅助脚本（如 verify_live_llm.py 真实 LLM 验证）
+├── docs/superpowers/specs/     # 设计规格：SPEC.md / PLAN.md / AGENT_LOG.md
+├── .github/workflows/          # ci.yml（test+build）/ publish.yml（PyPI 发布）
+├── Makefile                    # make test / demo / install
+├── pyproject.toml              # 包定义（[project.scripts] cah）
+└── README.md
+```
+
+运行时在工作区生成（已被 `.gitignore` 排除）：`memory/`（记忆）、
+`skills/`（技能）、`transcripts/`（转录）、`.env`（可选凭据）。
 
 ## 快速开始
 
@@ -32,6 +72,31 @@
    提示符 `> ` 下直接输入任务（例如"修复 main.py 里的 bug"）；**首次输入
    （即使以 `/` 开头）一律视为任务**。REPL 顶部 `Ctrl+C` 干净退出并触发
    SessionEnd 钩子；任务运行中 `Ctrl+C` 弹出暂停菜单（resume / abort）。
+
+## 安装与分发命令
+
+- **PyPI 安装**（推荐，主分发形态）：
+
+  ```bash
+  pip install nju-coding-agent-harness
+  ```
+
+- **源码分发**（获取最新/参与开发）：
+
+  ```bash
+  git clone https://github.com/clementineyyy/Coding-Agent-Harness.git
+  cd Coding-Agent-Harness
+  pip install -e ".[dev]"
+  ```
+
+- **发布新版**（维护者，Trusted Publishing 免 token）：
+
+  ```bash
+  # 1) pyproject.toml 升版本号（与 tag 同步，否则 PyPI 拒绝重复上传）
+  # 2) 打标签并推送，GitHub Actions publish.yml 自动构建并发布到 PyPI
+  git tag vX.Y.Z
+  git push origin vX.Y.Z
+  ```
 
 ## 凭据安全
 
@@ -153,6 +218,23 @@ shell 命令，隔离由**护栏**（危险模式 deny / ask）与**路径包含
 - 镜像默认 `python:3.11-slim`，需预装工具链（python/git 等）。
 - 未安装 Docker 或 daemon 未运行时快速报错，可回退 local。
 - Windows：需 Docker Desktop 并保持运行；挂载路径请使用绝对路径。
+
+## 安全边界说明
+
+安全由**多层边界叠加**，请勿依赖任何单层：
+
+| 边界 | 说明 |
+|---|---|
+| 护栏（第一道防线） | 内置 deny 清单拦截**无正当用途的破坏操作**（`rm -rf` 系统根目录、`format`、强删等）；敏感但可能正当的操作走 **ask 审批**（HITL 菜单），批准/拒绝沉淀为策略规则（§11.2） |
+| 路径包含性检查 | 文件类工具对工作区外路径直接 deny（§11.2） |
+| 沙箱（local 默认） | **不是安全边界**：在宿主直接以子进程执行，仅做超时与输出截断（§11.3） |
+| 沙箱（docker 可选） | 真隔离：默认 `--network=none`、仅挂载工作区、容器内读不到宿主凭据与文件系统 |
+| 网络闸门 | 默认关网（`network_enabled=false`）；开启后网络类工具/命令走 ask 审批（§11.3） |
+| 凭据边界 | keyring 加密存储优先，`.env` 明文备选；key **永不写入**日志/转录/记忆/策略；`/key status` 绝不回显明文 |
+| 数据边界 | 转录写工作区 `transcripts/`、记忆写 `memory/`（均被 `.gitignore` 排除）；上下文超预算自动压缩，防溢出 |
+
+**威胁模型假设**：本地用户自身可信；护栏防的是 **agent 失控 / 误操作**，
+不是防恶意本地进程——若需对抗不可信输入，请务必启用 Docker 沙箱后端。
 
 ## 测试
 
