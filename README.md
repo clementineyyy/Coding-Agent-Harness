@@ -208,14 +208,6 @@ make test
   （`test_security_scan.py`）/性能冒烟（`test_perf_smoke.py`）/文档一致性
   （`test_docs.py`）。
 
-## 已知实现偏差（与 spec 附录的差异）
-
-1. 类型定义集中在 `harness/registry.py`（`Context` / `Tool` / `ToolResult`），
-   无独立 `types.py`（`AgentResult` 在 `agent.py`）。
-2. MCP 客户端为手写行式 JSON-RPC 2.0（stdio/url），而非官方 `mcp` SDK
-   （依赖已安装但未使用）——零网络依赖、可确定性测试（§4.3）。
-3. 参数校验为手写轻量 schema 校验（`registry.validate_args`），未引入
-   `jsonschema` 依赖（§3.2）。
 
 ## 已知限制
 
