@@ -263,3 +263,38 @@
 
 - **真实 LLM API 链路**（OpenAILLM → api.deepseek.com：SSE 线格式、tool_calls 字段、限流/错误响应）仅对合成 payload 做单元测试，**从未以真实 key 端到端运行**。待用户提供 key 后执行 REPL/一次性脚本验证。
 - POSIX 分支的 `make` 未在本机执行（无 make），已由 CI ubuntu 首跑覆盖。
+
+## Phase 8 — 真实 LLM 验证与 PyPI 发布（2026-08-18）
+
+### 8.1 真实 LLM 端到端验证（用户硅基流动 Key）
+
+- `scripts/verify_live_llm.py`（74e5c54 加入，53fdd2b 修正 tool_calls 断言）：
+  `--base-url https://api.siliconflow.cn/v1 --model deepseek-ai/DeepSeek-V3`
+- 结果：连接 + SSE 文本回合 OK；tool_calls 映射为 harness 形状；全管线任务 → bash 工具执行 → final_answer；
+  EVENTS 序列 task_submitted→tool_requested→tool_finished→final_answer；均 exit 0。附录 C 首项由此闭环。
+
+### 8.2 SPEC §7 合规审计与缺口补齐（b992bfd）
+
+- 审计结论：keyring 存储、.env 加载、getpass 向导、/key status 无明文、兜底安全均达标；三缺口：
+  1. console script `cah`（§7.2 明示"提供 console script（如 cah）作为入口命令"）— 缺失
+  2. 密钥"可选验证"（§7.1：调 `{base_url}/models` 轻量确认，通过才落盘并记录 verified_at；失败提示重输不落盘）— 缺失
+  3. `/key clear` 环境来源提示"请手动从 .env 删除"（§7.1）— 缺失
+- 补齐（TDD 红→绿；新增 verify_api_key×3 / mark_verified / REPL 验证失败不落盘 / 验证成功落盘+标记 / env 来源提示 / cah 漂移测试，186 测试全绿）：
+  - credentials.py：`verify_api_key()`（httpx，可注入 client 保离线测试）、`CredentialStore.mark_verified()`
+  - main.py：`_enter_key_flow()`（≤3 次尝试、可选验证），`_first_run_wizard` 与 `/key set` 共用；`/key clear` 按来源分流
+  - README：cah 运行命令、来源措辞修正（keyring → .env 文件 → 向导）、可选验证说明
+- 用户裁决：补齐三项。
+
+### 8.3 PyPI 发布 v0.1.0 / v0.1.1
+
+- v0.1.0（148296e）：Trusted Publishing（OIDC 免 token，环境 pypi）发布 nju-coding-agent-harness（原名已被他人占用）；
+  干净 venv 安装 + 核心模块导入验证通过。
+- v0.1.1（b6c9ed4）：首次 tag v0.1.1 时 pyproject 版本未同步（仍 0.1.0）→ 产物重复上传被 PyPI 拒绝（build 成功、publish 失败，
+  日志接口需 admin 权限，经版本号比对定位）→ **教训：tag 与 pyproject 版本必须同一 commit 同步**；修复 = 升版本 → 删旧 tag
+  → 重建 → 重推。
+- 干净环境验证：pip install nju-coding-agent-harness（注意 pip 索引缓存曾致误装 0.1.0，加 --no-cache-dir 后正确）→ 0.1.1 +
+  cah 入口点；`cah` 冒烟：无 key 时进向导、空行 EOF 干净退出 exit 0。
+
+### 8.4 环境事件
+
+- GitHub HTTPS 短暂被阻断（TLS 握手失败、ICMP 通、pypi 可达）→ 用户开启代理后恢复；push/tag 未受影响重推成功。
