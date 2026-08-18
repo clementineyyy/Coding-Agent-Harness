@@ -36,10 +36,11 @@
 
 ## 快速开始
 
-1. **安装**（源码分发，项目根目录）：
+1. **安装**（PyPI 分发，任选其一）：
 
    ```bash
-   pip install -e ".[dev]"
+   pip install nju-coding-agent-harness        # PyPI 正式发布
+   pip install -e ".[dev]"                     # 源码分发（项目根目录）
    ```
 
 2. **配置 API Key**：首次运行时会自动进入配置向导（`getpass` 隐藏输入，

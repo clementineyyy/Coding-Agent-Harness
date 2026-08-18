@@ -375,7 +375,8 @@ keyring；验证失败提示重输，不落盘）。
 
 **形态选择**：**PyPI 包为主，源码分发为辅**。
 
-- **PyPI**：包名 `coding-agent-harness`；`pip install coding-agent-harness`；
+- **PyPI**：包名 `nju-coding-agent-harness`（原名 `coding-agent-harness` 已被他人占用）；
+  `pip install nju-coding-agent-harness`；
   提供 console script（如 `cah`）作为入口命令；Python 3.11+ 为平台前提
 - **源码**：`git clone` 仓库 + `pip install -e .`
 
