@@ -12,7 +12,7 @@ def test_readme_commands_match_implementation():
 
 
 def test_component_docs_exist():
-    assert (ROOT / "docs" / "COMPONENTS.md").exists()
+    assert (ROOT / "docs" / "superpowers" / "specs" / "SPEC.md").exists()
 
 
 def test_readme_command_table_matches_help_text():
