@@ -1,38 +1,14 @@
 # Coding Agent Harness
 
-一个最小但真实的编码智能体框架（Python 3.11+，Windows/Linux），用 DeepSeek 模型
-（OpenAI 兼容协议）自主完成编码任务，并把**护栏 / 沙箱 / 记忆 / 上下文工程 /
-人机协同 HITL / 反馈闭环**六维度做成透明、可测试的组件。
+一个真实的编码智能体框架（Python 3.11+，Windows/Linux）
 
-设计规格见 `docs/superpowers/specs/SPEC.md`（下文以 `§x.y` 引用章节号）；
-每个组件验证了什么理论，见 `docs/COMPONENTS.md`。
+设计规格见 `docs/superpowers/specs/SPEC.md`（下文以 `§x.y` 引用章节号）。
+## 组件图（SPEC §5.1）
 
-## 架构一页图
+![组件图](docs/superpowers/specs/assets/Gemini_Generated_Image_y9hi41y9hi41y9hi.jpg)
 
-```
-┌──────────────────────────── 用户（终端） ────────────────────────────┐
-│  cah  （等价 python -m harness.main）                               │
-│  main.py  REPL：首次输入即任务 / /命令 / Ctrl+C 菜单 / ask 编号菜单   │
-└───────────────┬──────────────────────────────┬─────────────────────┘
-                │ 任务 / 回答                    │ 流式文本 / 步数统计
-                ▼                               │
-┌──────────────────────────────────────────────▼─────────────────────┐
-│ Agent（agent.py）— 每次任务：检索记忆 → 迭代循环 → 收尾整合           │
-│  每回合：LLM 调用（llm.py，流式、工具调用解析）                      │
-│  └─ 工具流水线（每次工具调用，严格排序，§5.2）：                     │
-│     护栏判定(guardrails.py) → 状态机(state.py) → 钩子(hooks.py)     │
-│     → 执行(sandbox.py) → 钩子 → 结果回灌上下文                       │
-│     其中 ask 判定 → HITL 菜单(main.py) → 自适应策略(policy.py)      │
-└───────┬───────────────────────────┬───────────────┬───────────────┘
-        │                           │               │
-┌───────▼─────────┐   ┌─────────────▼───────┐   ┌───▼──────────────┐
-│ 注册表 registry │   │ 支撑服务             │   │ 持久化（工作区内） │
-│ 内置工具 tools/ │   │ Policy 自适应策略    │   │ memory/*.md 记忆 │
-│ MCP 工具 mcp.py │   │ MemoryStore(TF-IDF) │   │ skills/*/SKILL.md│
-│ 技能 tools/skills│   │ HookBus 转录钩子    │   │ transcripts/*.json│
-│ 子智能体 subagent │   │ StateMachine 状态机 │   │ .env（可选）      │
-└─────────────────┘   └─────────────────────┘   └──────────────────┘
-```
+职责划分：Agent 只负责循环与状态；工具流水线只负责"一次调用"的判定-执行；
+护栏/策略/钩子/沙箱各自单一职责；状态机是交互主轴。完整数据流见 SPEC §5.2。
 
 ## 快速开始
 
@@ -57,7 +33,7 @@
    （即使以 `/` 开头）一律视为任务**。REPL 顶部 `Ctrl+C` 干净退出并触发
    SessionEnd 钩子；任务运行中 `Ctrl+C` 弹出暂停菜单（resume / abort）。
 
-## 凭据安全（§4.2 / §7.1）
+## 凭据安全
 
 - **来源优先级**：keyring（Windows Credential Manager，服务名
   `coding-agent-harness`）→ 项目根目录 `.env` 文件（`DEEPSEEK_API_KEY=...`）
