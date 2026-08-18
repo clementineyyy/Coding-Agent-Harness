@@ -87,8 +87,8 @@ def main() -> int:
         if not res.tool_calls:
             print("FAIL: 模型未返回 tool_calls（可能未走工具调用路径）")
             return 1
-        assert res.tool_calls[0]["function"]["name"] == "bash"
-        assert "echo hello-from-live" in res.tool_calls[0]["function"]["arguments"]
+        assert res.tool_calls[0]["name"] == "bash"
+        assert "echo hello-from-live" in res.tool_calls[0]["arguments"]["command"]
         print("      工具名与参数解析正确")
     except LLMError as e:
         print(f"FAIL: 工具回合 LLMError: {type(e).__name__}: {e}")
