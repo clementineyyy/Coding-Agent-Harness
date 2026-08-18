@@ -176,18 +176,57 @@ shell 命令，隔离由**护栏**（危险模式 deny / ask）与**路径包含
 
 ## 测试
 
+[![CI](https://github.com/clementineyyy/Coding-Agent-Harness/actions/workflows/ci.yml/badge.svg)](https://github.com/clementineyyy/Coding-Agent-Harness/actions/workflows/ci.yml)
+
+**一键运行**（GitHub Actions CI 与本地使用同一命令）：
+
 ```bash
-python -m pytest harness/tests/ -v
+make test
 ```
 
-- 全部测试**无网络依赖**（假 LLM 客户端 + 夹具记忆库；MCP 测试使用手写的
-  假 stdio 服务器子进程，不联网、可确定性运行）。
-- 测试覆盖：六维度组件单测（`test_guardrails.py` … `test_agent_feedback.py`）、
-  REPL（`test_repl.py`）、验收矩阵（`test_acceptance_matrix.py`，逐条对应
-  §9）、凭据扫描（`test_security_scan.py`）、性能冒烟（`test_perf_smoke.py`）、
-  文档一致性（`test_docs.py`）。
-- 机制演示脚本：`harness/tests/mechanism_demo/`（护栏拒绝 / 反馈修正 /
-  HITL 状态轨迹）。
+- `make test` 自动完成：`.venv` 不存在则创建 → `pip install -e ".[dev]"`
+  → `pytest harness/tests -q`（Windows 用 `.venv\Scripts\python.exe`，
+  POSIX 用 `.venv/bin/python`，Makefile 内通过 `$(OS)` 自动判断）。
+- **Windows 无 make** 时的等价命令：
+
+  ```powershell
+  python -m venv .venv
+  .venv\Scripts\python.exe -m pip install -e ".[dev]"
+  .venv\Scripts\python.exe -m pytest harness/tests -q
+  ```
+
+- 只安装不跑测试：`make install`。
+
+### 机制演示（§A.4-D 对齐）
+
+`make demo` 顺序运行三个机制演示脚本（全部退出码 0 即通过）：
+
+1. **demo_1_guardrail_deny** — 护栏拦截危险动作：FakeLLM 请求
+   `rm -rf` / 网络访问等危险动作时，护栏在**执行前**拒绝（deny），
+   绝不让危险命令进入沙箱执行；
+2. **demo_2_feedback_change** — 反馈闭环：工具失败的错误信息回灌
+   上下文后，模型的**下一步动作发生改变**（重试 → 换用替代命令）；
+3. **demo_3_hitl_trace** — HITL 状态机全轨迹确定性复现：
+   `ask → awaiting_user → 执行 → completed` 完整状态迁移。
+
+其中 **demo ③（HITL 状态机全轨迹确定性复现）对应 §A.4-D"主要贡献"
+清单中的重点维度**：以确定性方式复现人机协同的关键状态序列，作为
+该贡献的可运行证据（配合 `test_mechanism_demo.py` 的自动化包装）。
+
+### 离线确定性测试
+
+- 全部测试**无网络依赖、不访问真实 LLM**：由 FakeLLM 客户端与
+  `httpx.MockTransport` 驱动，可离线、确定性复现；MCP 测试使用手写的
+  假 stdio 服务器子进程，不联网。
+- 主要测试文件：
+  `test_agent_core.py` / `test_agent_feedback.py` / `test_agent_context.py` /
+  `test_agent_end.py`（六维度组件单测）、`test_repl.py`（REPL 行为）、
+  `test_acceptance_matrix.py`（验收矩阵，逐条对应 §9）、
+  `test_mechanism_demo.py`（机制演示包装，对应上文 demo ①②③）、
+  `test_llm.py`（LLM 客户端，httpx MockTransport）。
+- 其余覆盖：护栏/状态机/策略/记忆/沙箱/钩子/MCP/凭据扫描
+  （`test_security_scan.py`）/性能冒烟（`test_perf_smoke.py`）/文档一致性
+  （`test_docs.py`）。
 
 ## 已知实现偏差（与 spec 附录的差异）
 

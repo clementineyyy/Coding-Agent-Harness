@@ -29,3 +29,13 @@ def test_readme_security_and_sandbox_notes():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for fragment in ["keyring", ".env", "非隔离", "Docker"]:
         assert fragment in readme, f"README 缺少安全/沙箱说明: {fragment}"
+
+
+def test_makefile_has_test_target():
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "test:" in makefile and "pytest" in makefile
+
+
+def test_ci_workflow_exists_and_runs_tests():
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "pytest" in ci and "actions/checkout" in ci and "upload-artifact" in ci
