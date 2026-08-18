@@ -41,6 +41,12 @@ def test_ci_workflow_exists_and_runs_tests():
     assert "pytest" in ci and "actions/checkout" in ci and "upload-artifact" in ci
 
 
+def test_gitlab_ci_has_unit_test_job():
+    gitlab = (ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8")
+    assert "unit-test:" in gitlab, ".gitlab-ci.yml 缺少 unit-test job"
+    assert "pytest harness/tests" in gitlab
+
+
 def test_console_script_cah_declared():
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")

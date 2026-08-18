@@ -249,6 +249,8 @@ make test
 - `make test` 自动完成：`.venv` 不存在则创建 → `pip install -e ".[dev]"`
   → `pytest harness/tests -q`（Windows 用 `.venv\Scripts\python.exe`，
   POSIX 用 `.venv/bin/python`，Makefile 内通过 `$(OS)` 自动判断）。
+- **GitLab 镜像仓库 CI**：仓库根目录 `.gitlab-ci.yml` 提供名为 `unit-test`
+  的 job（与本地同一命令，push 时触发）。
 - **Windows 无 make** 时的等价命令：
 
   ```powershell

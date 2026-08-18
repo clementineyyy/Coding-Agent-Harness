@@ -1,0 +1,12 @@
+image: python:3.11
+
+stages:
+  - test
+
+unit-test:
+  stage: test
+  script:
+    - pip install -e ".[dev]"
+    - python -m pytest harness/tests -q
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push"'
