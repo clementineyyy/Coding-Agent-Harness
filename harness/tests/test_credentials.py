@@ -1,6 +1,7 @@
+import httpx
 import pytest
 from pathlib import Path
-from harness.credentials import CredentialStore
+from harness.credentials import CredentialStore, verify_api_key
 
 class FakeKeyring:
     def __init__(self): self.data = {}
@@ -73,3 +74,39 @@ def test_wizard_rejects_whitespace(monkeypatch):
     monkeypatch.setattr(creds.getpass, "getpass", lambda prompt: "   ")
     with pytest.raises(ValueError):
         creds.wizard_enter_key()
+
+
+def test_verify_api_key_success():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"data": [{"id": "deepseek-chat"}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    assert verify_api_key("https://api.example.com", "sk-live", http_client=client) is True
+    assert seen["path"] == "/models"
+    assert seen["auth"] == "Bearer sk-live"
+
+
+def test_verify_api_key_rejects_401():
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(401, json={"error": "bad key"})))
+    assert verify_api_key("https://api.example.com", "sk-bad", http_client=client) is False
+
+
+def test_verify_api_key_network_error_false():
+    def boom(request):
+        raise httpx.ConnectError("connection refused")
+
+    client = httpx.Client(transport=httpx.MockTransport(boom))
+    assert verify_api_key("https://api.example.com", "sk-x", http_client=client) is False
+
+
+def test_mark_verified_records_timestamp(tmp_path):
+    kr = FakeKeyring()
+    cs = CredentialStore(env_file=str(tmp_path / ".env"), keyring_backend=kr)
+    cs.set("sk-x")
+    cs.mark_verified()
+    assert cs.status()["verified_at"] is not None
+    assert cs.status()["source"] == "keyring"

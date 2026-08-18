@@ -39,3 +39,10 @@ def test_makefile_has_test_target():
 def test_ci_workflow_exists_and_runs_tests():
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "pytest" in ci and "actions/checkout" in ci and "upload-artifact" in ci
+
+
+def test_console_script_cah_declared():
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert 'cah = "harness.main:main"' in pyproject, "pyproject 缺少 [project.scripts] cah"
+    assert "cah" in readme, "README 未提 cah 入口命令"

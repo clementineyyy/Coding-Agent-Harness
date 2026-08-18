@@ -11,7 +11,7 @@
 
 ```
 ┌──────────────────────────── 用户（终端） ────────────────────────────┐
-│  python -m harness.main                                            │
+│  cah  （等价 python -m harness.main）                               │
 │  main.py  REPL：首次输入即任务 / /命令 / Ctrl+C 菜单 / ask 编号菜单   │
 └───────────────┬──────────────────────────────┬─────────────────────┘
                 │ 任务 / 回答                    │ 流式文本 / 步数统计
@@ -50,7 +50,7 @@
 3. **运行**：
 
    ```bash
-   python -m harness.main
+   cah                       # 等价 python -m harness.main
    ```
 
    提示符 `> ` 下直接输入任务（例如"修复 main.py 里的 bug"）；**首次输入
@@ -60,9 +60,12 @@
 ## 凭据安全（§4.2 / §7.1）
 
 - **来源优先级**：keyring（Windows Credential Manager，服务名
-  `coding-agent-harness`）→ 环境变量 / `.env` 文件 → 首次运行向导。
+  `coding-agent-harness`）→ 项目根目录 `.env` 文件（`DEEPSEEK_API_KEY=...`）
+  → 首次运行向导。
 - **首选 keyring**：操作系统加密存储，凭据不出本机。`/key set` 交互录入
-  （隐藏输入）后写入 keyring；`/key clear` 删除；`/key status` 只回显
+  （隐藏输入）后可选"验证密钥"（调 `{base_url}/models` 轻量确认，通过后
+  才写入 keyring 并记录验证时间；失败提示重输、不落盘）；`/key clear`
+  删除 keyring 凭据（来源为 `.env` 时只提示手动删除）；`/key status` 只回显
   "是否已配置 / 来源 / 验证时间"，**绝不回显明文**。
 - **`.env` 明文风险**：`.env` 文件是本地明文（`DEEPSEEK_API_KEY=...`），
   且其中的值会进入进程环境、对同一用户的其他进程可见；不要提交进 Git

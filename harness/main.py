@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from harness.agent import Agent
 from harness.config import Config
-from harness.credentials import CredentialStore, wizard_enter_key
+from harness.credentials import CredentialStore, verify_api_key, wizard_enter_key
 from harness.hooks import HookBus
 from harness.llm import LLMError, OpenAILLM
 from harness.memory import MemoryStore
@@ -122,7 +122,7 @@ class _TokenCounter:
 def run_repl(config: Config) -> int:
     store = CredentialStore()
     if store.get() is None:
-        _first_run_wizard(store)
+        _first_run_wizard(store, config)
     try:
         agent = make_agent(config)
     except Exception as exc:
@@ -153,7 +153,7 @@ def run_repl(config: Config) -> int:
         _run_task(agent, line)
 
 
-def _first_run_wizard(store) -> None:
+def _first_run_wizard(store, config) -> None:
     print("未检测到 DeepSeek API Key（keyring / .env 均无）。")
     try:
         answer = input("现在设置 API Key？[y/N] ")
@@ -161,14 +161,41 @@ def _first_run_wizard(store) -> None:
         print()
         return
     if answer.strip().lower() in ("y", "yes"):
-        try:
-            key = wizard_enter_key()
-            store.set(key)
-            print("API Key 已保存")
-        except (ValueError, RuntimeError) as exc:
-            print(f"设置失败: {exc}")
+        if not _enter_key_flow(store, config):
+            print("未保存；可在 REPL 中用 /key set 随时配置。")
     else:
         print("跳过设置；可在 REPL 中用 /key set 随时配置。")
+
+
+def _enter_key_flow(store, config) -> bool:
+    for attempt in range(3):
+        try:
+            key = wizard_enter_key()
+        except ValueError as exc:
+            print(f"输入无效: {exc}")
+            continue
+        verify = False
+        try:
+            verify = input("验证密钥有效性？（调模型列表接口，y/N 默认不验证）").strip().lower() in ("y", "yes")
+        except (EOFError, KeyboardInterrupt):
+            print()
+        if verify and not verify_api_key(config.base_url, key):
+            print(f"验证失败（第 {attempt + 1}/3 次）：无法访问模型列表，未保存。")
+            continue
+        try:
+            store.set(key)
+        except RuntimeError as exc:
+            print(f"保存失败: {exc}")
+            return False
+        if verify:
+            try:
+                store.mark_verified()
+            except RuntimeError:
+                pass
+        print("API Key 已保存")
+        return True
+    print("已放弃设置（多次验证失败，未保存）。")
+    return False
 
 
 def _end_session(agent) -> None:
@@ -228,12 +255,8 @@ def _dispatch_command(agent, store, config, line) -> tuple[int | None, Agent | N
 
 def _handle_key(agent, store, config, sub: str) -> tuple[int | None, Agent | None]:
     if sub == "set":
-        try:
-            key = wizard_enter_key()
-            store.set(key)
-            print("API Key 已保存")
-        except (ValueError, RuntimeError) as exc:
-            print(f"设置失败: {exc}")
+        if not _enter_key_flow(store, config):
+            return None, agent
         if store.get() is not None:
             try:
                 return None, make_agent(config)
@@ -250,11 +273,17 @@ def _handle_key(agent, store, config, sub: str) -> tuple[int | None, Agent | Non
         )
         return None, agent
     if sub == "clear":
-        try:
-            store.clear()
-            print("API Key 已清除")
-        except RuntimeError as exc:
-            print(f"清除失败: {exc}")
+        source = store.status().get("source")
+        if source == "env":
+            print("当前 Key 来自 .env 文件：请手动从 .env 中删除（程序不自动改用户文件）。")
+        elif source == "keyring":
+            try:
+                store.clear()
+                print("API Key 已从 keyring 清除")
+            except RuntimeError as exc:
+                print(f"清除失败: {exc}")
+        else:
+            print("当前未配置 API Key。")
         return None, agent
     print("用法: /key set|status|clear")
     return None, agent

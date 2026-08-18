@@ -17,6 +17,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest"]
 
+[project.scripts]
+cah = "harness.main:main"
+
 [tool.pytest.ini_options]
 testpaths = ["harness/tests"]
 addopts = "-q"

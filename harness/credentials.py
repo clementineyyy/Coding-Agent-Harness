@@ -1,9 +1,28 @@
 from __future__ import annotations
 
 import getpass
+from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
+
 _ENV_KEY = "DEEPSEEK_API_KEY"
+
+
+def verify_api_key(base_url: str, api_key: str, http_client: httpx.Client | None = None) -> bool:
+    """调 {base_url}/models 轻量验证 API Key 有效性；失败（HTTP 非 200 / 网络错误）返回 False。"""
+    client = http_client if http_client is not None else httpx.Client(timeout=10)
+    try:
+        resp = client.get(
+            f"{base_url.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        return resp.status_code == 200
+    except httpx.HTTPError:
+        return False
+    finally:
+        if http_client is None:
+            client.close()
 
 
 class CredentialStore:
@@ -61,6 +80,17 @@ class CredentialStore:
             self._keyring.delete_password(self.service, "api_key")
         except Exception:
             raise RuntimeError("keyring 删除失败，无法删除 API Key") from None
+
+    def mark_verified(self) -> None:
+        if self._keyring is None:
+            raise RuntimeError("keyring 不可用（无凭据服务），无法记录验证时间")
+        try:
+            self._keyring.set_password(
+                self.service, "verified_at",
+                datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            )
+        except Exception:
+            raise RuntimeError("keyring 写入失败，无法记录验证时间") from None
 
     def verified_at(self) -> str | None:
         return self._keyring_get("verified_at")

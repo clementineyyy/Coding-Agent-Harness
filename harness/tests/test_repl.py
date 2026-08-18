@@ -193,10 +193,10 @@ def test_run_repl_key_commands(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("harness.main.wizard_enter_key", lambda: "DUMMY-KEY")
     agent = build_agent(tmp_path)
     monkeypatch.setattr("harness.main.make_agent", lambda cfg: agent)
-    feed_inputs(monkeypatch, ["y", "t1", "/key status", "/key clear", "/key status", "/exit"])
+    feed_inputs(monkeypatch, ["y", "n", "t1", "/key status", "/key clear", "/key status", "/exit"])
     assert run_repl(Config(workspace=tmp_path, tool_timeout=5)) == 0
     out = capsys.readouterr().out
-    assert "已保存" in out and "配置: 是" in out and "已清除" in out and "配置: 否" in out
+    assert "已保存" in out and "配置: 是" in out and "已从 keyring 清除" in out and "配置: 否" in out
     assert store.get() is None
 
 
@@ -318,3 +318,50 @@ def test_run_repl_interrupt_in_running_state_resume(tmp_path, monkeypatch, capsy
     out = capsys.readouterr().out
     assert "搞定了" in out and calls["n"] == 2
     assert agent.state.state == "completed"
+
+
+def test_key_set_verify_failure_does_not_store(tmp_path, monkeypatch, capsys):
+    store = make_fake_store(monkeypatch, key="DUMMY-KEY")
+    agent = build_agent(tmp_path)
+    monkeypatch.setattr("harness.main.make_agent", lambda cfg: agent)
+    monkeypatch.setattr("harness.main.wizard_enter_key", lambda: "sk-bad")
+    monkeypatch.setattr("harness.main.verify_api_key", lambda base, key: False)
+    feed_inputs(monkeypatch, ["t1", "/key set", "y", "y", "y", "/exit"])
+    assert run_repl(Config(workspace=tmp_path, tool_timeout=5)) == 0
+    out = capsys.readouterr().out
+    assert "验证失败" in out and store.get() == "DUMMY-KEY"
+
+
+def test_key_set_verify_success_stores_and_marks(tmp_path, monkeypatch, capsys):
+    store = make_fake_store(monkeypatch, key="DUMMY-KEY")
+    marks = []
+    store.mark_verified = lambda: marks.append(1)
+    agent = build_agent(tmp_path)
+    monkeypatch.setattr("harness.main.make_agent", lambda cfg: agent)
+    monkeypatch.setattr("harness.main.wizard_enter_key", lambda: "sk-good")
+    monkeypatch.setattr("harness.main.verify_api_key", lambda base, key: True)
+    feed_inputs(monkeypatch, ["t1", "/key set", "y", "/exit"])
+    assert run_repl(Config(workspace=tmp_path, tool_timeout=5)) == 0
+    assert store.get() == "sk-good" and marks == [1]
+
+
+def test_key_clear_env_source_hints_manual_removal(tmp_path, monkeypatch, capsys):
+    state = {"key": "sk-env"}
+    store = SimpleNamespace(
+        get=lambda: state["key"],
+        set=lambda k: state.update(key=k),
+        clear=lambda: state.update(key=None),
+        status=lambda: {
+            "configured": True,
+            "source": "env",
+            "verified_at": None,
+        },
+    )
+    monkeypatch.setattr("harness.main.CredentialStore", lambda *a, **k: store)
+    agent = build_agent(tmp_path)
+    monkeypatch.setattr("harness.main.make_agent", lambda cfg: agent)
+    feed_inputs(monkeypatch, ["t1", "/key clear", "/exit"])
+    assert run_repl(Config(workspace=tmp_path, tool_timeout=5)) == 0
+    out = capsys.readouterr().out
+    assert "手动从 .env 中删除" in out
+    assert state["key"] == "sk-env"
