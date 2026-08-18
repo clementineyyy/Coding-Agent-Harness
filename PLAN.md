@@ -1889,3 +1889,51 @@ git commit -m "docs: README quickstart, security notes and component theory docs
   1. 新增 `harness/types.py` 与 `harness/fake_llm.py`（spec 附录目录未列，属接口层必要补充）。
   2. MCP 采用手写行式 JSON-RPC（stdio/url）而非官方 `mcp` SDK（spec §4.3 写官方 SDK）——零网络依赖、可确定性测试；若坚持官方 SDK 需调整 T18。
   3. `registry.validate` 手写轻量 schema 校验（不引入 jsonschema 依赖）。
+---
+
+## Task 28: 测试基建（一键测试 + GitHub Actions CI + 离线确定性证据 + 演示对齐）
+
+**目标**：满足外部验收测试要求——
+1. 一键运行测试命令（`make test` 或等价），覆盖核心功能；
+2. GitHub Actions CI：每次 push 自动运行测试；产出可下载构建产物（wheel/sdist）；
+3. 核心机制由 mock/stub LLM 驱动的确定性单元测试（不依赖网络与真实 LLM）——已在 L0-L4 落地（FakeLLM/httpx MockTransport），本任务汇总证据并写入 README；
+4. 机制演示对齐 §A.4-D"主要贡献"（HITL 状态机全轨迹确定性复现 = 重点维度）——已由 T25 demos 落地，本任务在 README 明示对齐关系。
+
+**涉及文件**
+- Create: `Makefile`、`.github/workflows/ci.yml`
+- Modify: `pyproject.toml`（补 `[build-system]`，使 wheel/sdist 可构建）、`README.md`（测试章节 + CI badge + 机制演示/§A.4-D 对齐小节）、`harness/tests/test_docs.py`（新增漂移测试：Makefile 含 test target、ci.yml 存在且含 pytest）
+
+**接口**
+- `make test`：一键——若 `.venv` 不存在则自动创建并 `pip install -e ".[dev]"`，然后 `pytest harness/tests -q`（Windows 用 `.venv\Scripts\python.exe`，POSIX 用 `.venv/bin/python`）
+- `make demo`：顺序运行三个机制演示脚本（demo_1_guardrail_deny、demo_2_feedback_change、demo_3_hitl_trace），全部退出码 0 即通过
+- `make install`：建 venv + 安装
+- `.github/workflows/ci.yml`：`on: push + pull_request`；job test（ubuntu-latest / Python 3.11 / `pip install -e ".[dev]"` / `pytest harness/tests -q`）；job build（needs: test / `python -m build` / `actions/upload-artifact` 上传 `dist/`）
+- `pyproject.toml` 加：
+  ```toml
+  [build-system]
+  requires = ["setuptools>=61"]
+  build-backend = "setuptools.build_meta"
+  ```
+  （构建工具非运行时依赖，不违反 §4.3 依赖约束）
+
+**验证步骤**
+- [ ] **Step 1: 写失败测试**（test_docs.py 追加）：
+  ```python
+  def test_makefile_has_test_target():
+      makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+      assert "test:" in makefile and "pytest" in makefile
+
+  def test_ci_workflow_exists_and_runs_tests():
+      ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+      assert "pytest" in ci and "actions/checkout" in ci and "upload-artifact" in ci
+  ```
+- [ ] **Step 2: 运行确认失败** → FAIL（Makefile / ci.yml 不存在）
+- [ ] **Step 3: 最小实现**：Makefile（注意 Tab 缩进）、ci.yml、pyproject [build-system]、README 更新（测试运行方式改为 `make test` + Windows 等价；CI badge `https://github.com/clementineyyy/Coding-Agent-Harness/actions/workflows/ci.yml/badge.svg`；新增"机制演示（§A.4-D 对齐）"小节：demo ① 护栏拦截、② 反馈闭环改动作、③ HITL 状态机全轨迹=主要贡献维度，命令 `make demo`；新增"离线确定性"说明：全部测试无网络、FakeLLM/httpx MockTransport 驱动的测试文件清单）
+- [ ] **Step 4: 运行确认通过** → PASS；`make test` 全绿（若本机无 make，用 venv python 跑 pytest 等价验证并在报告中注明）
+- [ ] **Step 5: 提交**
+  ```bash
+  git add Makefile .github/workflows/ci.yml pyproject.toml README.md harness/tests/test_docs.py
+  git commit -m "test: one-click make test, GitHub Actions CI, build artifacts and demo alignment docs"
+  ```
+
+**依赖**：全部 L0-L4（T25 demos、T26 验收矩阵已存在）。**并行**：L5 第一个。
