@@ -380,6 +380,7 @@ def test_run_repl_threads_conversation_history(tmp_path, monkeypatch, capsys):
             return super().complete(messages, tools)
 
     rec = Recording([FakeTurn(text="第一轮答复"), FakeTurn(text="第二轮答复")])
+    make_fake_store(monkeypatch, key="DUMMY-KEY")
     agent = build_agent(tmp_path, llm=rec)
     monkeypatch.setattr("harness.main.make_agent", lambda cfg: agent)
     feed_inputs(monkeypatch, ["task1", "task2", "/exit"])
