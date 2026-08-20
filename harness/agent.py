@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import platform
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -24,10 +26,25 @@ if TYPE_CHECKING:
     from harness.sandbox import Sandbox
     from harness.state import StateMachine
 
-SYSTEM_PROMPT = (
-    "你是编码代理助手。可调用工具完成任务："
-    "先规划，再执行，最后给出最终答案。"
+_BASE_PROMPT = (
+    "你是编码代理助手，运行在用户本机。"
+    "必须使用工具实际执行任务，而不是只给出建议。"
+    "流程：先规划，再调用工具执行，最后根据工具结果给出最终答案。"
 )
+
+
+def build_system_prompt(config: Config | None = None) -> str:
+    parts = [_BASE_PROMPT]
+    if config is not None:
+        parts.append(
+            f"环境: 操作系统 {platform.system()} {platform.release()} "
+            f"({sys.platform}), Python {sys.version_info.major}.{sys.version_info.minor}, "
+            f"workspace 工作目录 {config.workspace}"
+        )
+    return " ".join(parts)
+
+
+SYSTEM_PROMPT = build_system_prompt()
 
 _ASK_OPTIONS = ["y", "n", "always_allow", "never_allow"]
 
@@ -188,7 +205,7 @@ class Agent:
     def run(self, task: str, history: list[dict] | None = None) -> AgentResult:
         result = AgentResult()
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": build_system_prompt(self.config)},
         ]
         if self.memory is not None:
             for chunk in self.memory.top_k_chunks(task):

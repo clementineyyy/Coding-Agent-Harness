@@ -24,7 +24,7 @@ def spec() -> Tool:
 
     tool = Tool(
         name="bash",
-        description="执行 shell 命令：运行构建 / 测试 / lint / 类型检查",
+        description="执行任意 shell 命令：查询系统（which/where/ps/注册表）、运行程序、文件操作、构建 / 测试 / lint 等",
         parameters={
             "type": "object",
             "properties": {"command": {"type": "string"}},
