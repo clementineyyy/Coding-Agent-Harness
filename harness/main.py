@@ -301,7 +301,7 @@ def _run_task(agent, task: str, allow_resume: bool = True) -> None:
     agent.llm = counter
     interrupted = False
     try:
-        result = agent.run(task)
+        result = agent.run(task, history=agent.messages or None)
     except KeyboardInterrupt:
         interrupted = True
         print()

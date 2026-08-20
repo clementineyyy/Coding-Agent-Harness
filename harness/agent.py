@@ -70,6 +70,7 @@ class Agent:
         self._compress_calls = 0
         self.warnings: list[str] = []
         self._tool_calls: list[dict] = []
+        self.messages: list[dict] = []
 
     def context_for_tool(self) -> Context:
         return Context(
@@ -184,17 +185,21 @@ class Agent:
                     return [m] + window
         return window
 
-    def run(self, task: str) -> AgentResult:
+    def run(self, task: str, history: list[dict] | None = None) -> AgentResult:
         result = AgentResult()
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": task},
         ]
         if self.memory is not None:
             for chunk in self.memory.top_k_chunks(task):
                 messages.append(
                     {"role": "system", "content": f"[memory] {chunk['chunk']}"}
                 )
+        if history:
+            if history[0]["role"] == "system":
+                history = history[1:]
+            messages.extend(history)
+        messages.append({"role": "user", "content": task})
         call_uid = 0
         fail_seq = 0
         fail_tool: str | None = None

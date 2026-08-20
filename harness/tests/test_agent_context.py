@@ -24,6 +24,39 @@ def test_memory_injected_at_start(tmp_path):
     assert any("[memory]" in m["content"] and "禁止在生产库" in m["content"] for m in system_msgs)
 
 
+def test_run_with_history_prepends_prior_turns(tmp_path):
+    llm = RecordingLLM([FakeTurn(text="done")])
+    a = Agent(llm, make_registry([bash_spec()]), LocalSandbox(), HookBus(), Policy(), StateMachine(), None,
+              Config(workspace=tmp_path, tool_timeout=5))
+    history = [
+        {"role": "user", "content": "旧问题"},
+        {"role": "assistant", "content": "旧回答"},
+    ]
+    a.run("新问题", history=history)
+    msgs = llm.seen[0][0]
+    contents = [str(m.get("content", "")) for m in msgs]
+    assert msgs[0]["role"] == "system"
+    # 新任务作为新的 user 消息，且位于历史之后
+    assert "新问题" in contents and "旧问题" in contents and "旧回答" in contents
+    assert contents.index("旧问题") < contents.index("旧回答") < contents.index("新问题")
+    assert msgs[-1]["role"] == "assistant"  # run 结束会追加最终回答
+
+
+def test_run_with_history_strips_leading_system_prompt(tmp_path):
+    llm = RecordingLLM([FakeTurn(text="done")])
+    a = Agent(llm, make_registry([bash_spec()]), LocalSandbox(), HookBus(), Policy(), StateMachine(), None,
+              Config(workspace=tmp_path, tool_timeout=5))
+    history = [
+        {"role": "system", "content": "你是编码代理助手。"},
+        {"role": "user", "content": "旧问题"},
+        {"role": "assistant", "content": "旧回答"},
+    ]
+    a.run("新问题", history=history)
+    msgs = llm.seen[0][0]
+    system_msgs = [m for m in msgs if m["role"] == "system"]
+    assert len(system_msgs) == 1  # 历史开头的 system 提示词被去除，不重复
+
+
 def test_budget_compression_drops_oldest_when_llm_fails(tmp_path):
     cfg = Config(workspace=tmp_path, max_budget_tokens=400, compression_keep_turns=2, tool_timeout=5)
     sb = LocalSandbox()

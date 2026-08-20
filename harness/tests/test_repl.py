@@ -225,11 +225,11 @@ def test_run_repl_interrupt_menu_abort(tmp_path, monkeypatch, capsys):
     real_run = agent.run
     calls = {"n": 0}
 
-    def flaky(task):
+    def flaky(task, *args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             raise KeyboardInterrupt()
-        return real_run(task)
+        return real_run(task, *args, **kwargs)
 
     agent.run = flaky
     monkeypatch.setattr("harness.main.make_agent", lambda cfg: agent)
@@ -253,11 +253,11 @@ def test_run_repl_interrupt_menu_resume_reruns_task(tmp_path, monkeypatch, capsy
     real_run = agent.run
     calls = {"n": 0}
 
-    def flaky(task):
+    def flaky(task, *args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             raise KeyboardInterrupt()
-        return real_run(task)
+        return real_run(task, *args, **kwargs)
 
     agent.run = flaky
     monkeypatch.setattr("harness.main.make_agent", lambda cfg: agent)
@@ -304,12 +304,12 @@ def test_run_repl_interrupt_in_running_state_resume(tmp_path, monkeypatch, capsy
     real_run = agent.run
     calls = {"n": 0}
 
-    def flaky(task):
+    def flaky(task, *args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             agent.state.fire("task_submitted", "loop")
             raise KeyboardInterrupt()
-        return real_run(task)
+        return real_run(task, *args, **kwargs)
 
     agent.run = flaky
     monkeypatch.setattr("harness.main.make_agent", lambda cfg: agent)
@@ -365,6 +365,28 @@ def test_key_clear_env_source_hints_manual_removal(tmp_path, monkeypatch, capsys
     out = capsys.readouterr().out
     assert "手动从 .env 中删除" in out
     assert state["key"] == "sk-env"
+
+
+def test_run_repl_threads_conversation_history(tmp_path, monkeypatch, capsys):
+    from harness.fake_llm import FakeLLM, FakeTurn
+
+    class Recording(FakeLLM):
+        def __init__(self, turns):
+            super().__init__(turns)
+            self.seen = []
+
+        def complete(self, messages, tools):
+            self.seen.append(list(messages))
+            return super().complete(messages, tools)
+
+    rec = Recording([FakeTurn(text="第一轮答复"), FakeTurn(text="第二轮答复")])
+    agent = build_agent(tmp_path, llm=rec)
+    monkeypatch.setattr("harness.main.make_agent", lambda cfg: agent)
+    feed_inputs(monkeypatch, ["task1", "task2", "/exit"])
+    assert run_repl(Config(workspace=tmp_path, tool_timeout=5)) == 0
+    assert len(rec.seen) == 2
+    second = " ".join(str(m.get("content", "")) for m in rec.seen[1])
+    assert "task1" in second and "第一轮答复" in second and "task2" in second
 
 
 def test_main_parses_config_arg(monkeypatch, tmp_path):
